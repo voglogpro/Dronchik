@@ -10,41 +10,43 @@
   <link rel="stylesheet" href="style.css">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1l6 13-6-4-6 4z' fill='%23ff5a5f'/%3E%3C/svg%3E">
 </head>
-<body>
+<body class="consent-open">
   <div id="map"></div>
 
-  <div id="consent" class="consent" role="dialog" aria-modal="true" aria-labelledby="consent-title" hidden>
+  <div id="consent" class="consent" role="dialog" aria-modal="true" aria-labelledby="consent-title" aria-describedby="consent-purpose">
     <form id="consent-form" class="consent-card">
       <header class="consent-head">
         <span class="logo" aria-hidden="true"></span>
         <div>
-          <p class="consent-kicker">Дрончик · карта угроз с воздуха</p>
-          <h2 id="consent-title">Прежде чем открыть карту</h2>
+          <p class="consent-kicker">Дрончик · информация для жителей</p>
+          <h2 id="consent-title" tabindex="-1">Наша цель — безопасность людей</h2>
         </div>
       </header>
 
-      <p class="consent-mission">Наша цель — вовремя предупредить людей об угрозе с воздуха и помочь беречь Россию.</p>
+      <p id="consent-purpose" class="consent-mission">Автор создал проект, чтобы помогать жителям России узнавать о сообщениях об опасности и беречь себя и близких.</p>
+      <p class="consent-explanation">Цель проекта — гражданское информирование, а не передача противнику сведений о полётах или содействие боевым действиям. Это заявление о цели автора, а не гарантия того, кто и как использует общедоступный сайт.</p>
 
       <ul class="consent-points">
         <li>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/></svg>
-          <div><b>Только публичные Telegram-каналы.</b> Сервис не официальный, с МЧС и органами власти не связан.
+          <div><b>Сообщения из открытых источников.</b> Сервис автоматически читает публичные Telegram-каналы. Открытый канал не обязательно является официальным. Сервис не связан с МЧС и органами власти.
             <details class="consent-sources"><summary>Какие каналы читаем</summary><div id="consent-channels" class="chips"></div></details>
           </div>
         </li>
         <li>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/></svg>
-          <div><b>Данные могут ошибаться и опаздывать.</b> Маршруты и время подлёта — оценка. Нет отметки — не значит, что нет опасности.</div>
+          <div><b>Это не радар и не подтверждение положения объекта.</b> Сообщения и их распознавание могут содержать ошибки и задержки. Если включены маршруты и время подлёта, это расчётные предположения. Нет отметки — не значит, что нет опасности.</div>
         </li>
         <li>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/></svg>
-          <div><b>При угрозе слушайте МЧС и власти</b> вашего региона — их указания главнее любой карты.</div>
+          <div><b>Действуйте по официальным сигналам МЧС и властей.</b> Карта не заменяет государственное оповещение. Не ждите подтверждения на сайте, если получили официальный сигнал.</div>
         </li>
         <li>
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M6 18L18 6"/></svg>
           <div><b>Не пересылайте данные с карты</b>, если в вашем регионе запрещено распространять сведения о БПЛА и ПВО.</div>
         </li>
       </ul>
+      <noscript><p class="consent-explanation">Для открытия карты нужен JavaScript. При угрозе ориентируйтесь на официальные оповещения.</p></noscript>
 
       <label class="consent-check">
         <input type="checkbox" id="consent-accept" required>
@@ -76,6 +78,11 @@
     </header>
 
     <div class="panel-body">
+      <section class="purpose-notice" aria-label="Цель проекта">
+        <strong>Для безопасности жителей России</strong>
+        <p>Сообщения открытых каналов могут ошибаться. Действуйте по официальным сигналам МЧС и властей.</p>
+        <button type="button" id="purpose-open" class="btn">О цели проекта и ограничениях</button>
+      </section>
       <section class="summary" id="summary"></section>
 
       <section>
@@ -171,9 +178,11 @@
     <button id="demo-restart" type="button">Сначала</button>
   </div>
 
+  <script src="notice.js"></script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
+
