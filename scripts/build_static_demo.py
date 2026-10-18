@@ -5,6 +5,7 @@
 HEATMAP_JSON — готовая тепловая карта (ответ /api/heatmap), иначе считается по сценарию демо.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -50,7 +51,8 @@ def main(out: str, maplibre_css: str, heatmap_json: str = "", key: str = "") -> 
     static = ROOT / "static"
 
     html = (static / "index.html").read_text(encoding="utf-8")
-    body = html[html.index("<body>") + len("<body>"):html.index("</body>")]
+    body_open = re.search(r"<body[^>]*>", html)   # у <body> бывают классы (consent-open)
+    body = html[body_open.end():html.index("</body>")]
     body = body.replace('<script src="https://telegram.org/js/telegram-web-app.js"></script>\n', "")
     cfg = {"maptilerKey": key, "maptilerStyle": "dataviz-dark", "demo": True,
            "regionsUrl": "regions.geojson", "districtsUrl": "districts.geojson", "placesUrl": "places.json",
@@ -65,7 +67,7 @@ def main(out: str, maplibre_css: str, heatmap_json: str = "", key: str = "") -> 
         '<meta name="claude:viewport-fit-sides" content="cover">\n'
         '<link rel="stylesheet" href="style.css">\n'
     )
-    (out_dir / "index.html").write_text(head + body.strip() + "\n", encoding="utf-8")
+    (out_dir / "index.html").write_text(head + f'<body class="{"consent-open"}">' + body.strip() + "\n", encoding="utf-8")
 
     css = Path(maplibre_css).read_text(encoding="utf-8")
     (out_dir / "style.css").write_text(css + "\n" + (static / "style.css").read_text(encoding="utf-8"), encoding="utf-8")

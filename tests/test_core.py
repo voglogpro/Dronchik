@@ -215,3 +215,31 @@ def test_stream_of_drones_is_not_one_zigzag_track(gaz):
     assert c not in (a, b)
     # обычное движение вперёд склеивается, как раньше
     assert tr.add_sighting(p["Рыльск"], T0 + 95 * 60, "ch2") is not None
+
+
+def test_track_has_approximate_origin_on_ukrainian_border(gaz):
+    from app.engine import Engine
+    from app.geo import haversine_km
+    e = Engine(gaz)
+    e.process("vrv_radar", "БПЛА над Рыльском", T0)
+    e.process("vrv_radar", "БПЛА над Льговом", T0 + 25 * 60)
+    track = e.snapshot(T0 + 26 * 60)["tracks"][0]
+    origin, first = track["origin"], track["points"][0]
+    assert origin and origin["kind"] in ("course", "nearest")
+    # Рыльск почти у границы: «откуда» — рядом и западнее (летят на восток)
+    assert haversine_km(origin["lat"], origin["lon"], first["lat"], first["lon"]) < 80
+    assert origin["lon"] < first["lon"]
+
+
+def test_destroyed_track_ends_at_shootdown_and_disappears(gaz):
+    from app.engine import Engine
+    e = Engine(gaz)
+    e.process("vrv_radar", "БПЛА над Миллерово", T0)
+    e.process("vrv_radar", "БПЛА над Ростовом", T0 + 30 * 60)
+    e.process("vrv_radar", "Над Ростовом сбит БПЛА", T0 + 35 * 60)
+    track = e.snapshot(T0 + 36 * 60)["tracks"][0]
+    assert track["status"] == "destroyed" and track["end"] and abs(track["end"]["lat"] - 47.23) < 0.3
+    assert e.snapshot(T0 + 36 * 60)["shootdowns"]
+    # через 12 минут после сбития исчезают и путь, и отметка
+    later = e.snapshot(T0 + 35 * 60 + 13 * 60)
+    assert later["tracks"] == [] and later["shootdowns"] == []

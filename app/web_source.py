@@ -128,7 +128,7 @@ MAX_PAGES = 15  # не больше ~300 постов назад за один �
 
 
 async def fetch_since(client: httpx.AsyncClient, channel: str, border: int, since: float,
-                      photos: dict[int, str] | None = None) -> tuple[list[tuple[int, float, str]], int]:
+                      photos: dict[int, str] | None = None, pause_s: float = 1.0) -> tuple[list[tuple[int, float, str]], int]:
     """(посты новее border и since, id самого свежего поста канала).
 
     Листает t.me/s/…?before= назад, пока не дойдёт до border или since.
@@ -156,18 +156,19 @@ async def fetch_since(client: httpx.AsyncClient, channel: str, border: int, sinc
         if oldest_id <= border + 1 or oldest_t < since or oldest_id <= 1:
             break
         before = oldest_id
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(pause_s)
     return sorted(posts.values()), newest
 
 
-async def poll_channel(client: httpx.AsyncClient, channel: str, last_seen: dict[str, int],
-                       on_message: OnMessage, history_s: float, banner: BannerState | None = None) -> None:
-    banner = banner or BannerState()
+async def collect_channel(client: httpx.AsyncClient, channel: str, last_seen: dict[str, int], history_s: float,
+                          banner: BannerState, pause_s: float = 1.0) -> list[tuple[int, float, str]]:
+    """Новые посты канала (id, время, текст) с уже распознанными баннерами; last_seen обновляется."""
     border = last_seen.get(channel, 0)
     # первый проход — история за history_s; дальше — всё новее последнего виденного поста
     since = time.time() - history_s if border == 0 else 0
     photos: dict[int, str] = {}
-    posts, newest = await fetch_since(client, channel, border, since, photos)
+    posts, newest = await fetch_since(client, channel, border, since, photos, pause_s)
+    out: list[tuple[int, float, str]] = []
     done, deferred = border, False
     for msg_id, t, text in posts:
         photo = photos.get(msg_id)
@@ -183,10 +184,40 @@ async def poll_channel(client: httpx.AsyncClient, channel: str, last_seen: dict[
                     break
             if data is not None:
                 text = banners.annotate(text, banners.classify(data))
-        await on_message(channel.lower(), msg_id, t, text)
+        out.append((msg_id, t, text))
         done = msg_id
     # запоминаем самый свежий пост канала, даже если он старше окна истории
     last_seen[channel] = done if deferred else max(border, newest)
+    return out
+
+
+async def poll_channel(client: httpx.AsyncClient, channel: str, last_seen: dict[str, int],
+                       on_message: OnMessage, history_s: float, banner: BannerState | None = None) -> None:
+    for msg_id, t, text in await collect_channel(client, channel, last_seen, history_s, banner or BannerState()):
+        await on_message(channel.lower(), msg_id, t, text)
+
+
+CONCURRENCY = 4         # одновременных запросов к t.me
+BACKOFF_MAX_S = 300
+
+
+async def warm_up(client: httpx.AsyncClient, channels: list[str], last_seen: dict[str, int], history_s: float,
+                  banner: BannerState, health: dict, sem: asyncio.Semaphore) -> list[tuple[float, str, int, str]]:
+    """История всех каналов одновременно, затем одним списком по времени: трекер видит сообщения в том порядке,
+    в каком они были опубликованы, а не канал за каналом."""
+    async def one(channel: str):
+        state = health["channels"][channel]
+        async with sem:
+            try:
+                posts = await collect_channel(client, channel, last_seen, history_s, banner, pause_s=0.6)
+                state.update(ok=True, last_ok=time.time(), error=None)
+                return [(t, channel.lower(), mid, text) for mid, t, text in posts]
+            except Exception as exc:
+                log.warning("канал %s: %s", channel, exc)
+                state.update(ok=False, last_error=time.time(), error=f"{type(exc).__name__}: {exc}"[:200])
+                return []
+    results = await asyncio.gather(*(one(ch) for ch in channels))
+    return sorted((item for rows in results for item in rows), key=lambda r: (r[0], r[1], r[2]))
 
 
 async def run_web_channels(channels: list[str], on_message: OnMessage, interval: float = 30.0,
@@ -195,27 +226,47 @@ async def run_web_channels(channels: list[str], on_message: OnMessage, interval:
     По нему сайт показывает, есть ли связь с Telegram (иначе «пусто» выглядело бы как «угроз нет»)."""
     last_seen: dict[str, int] = {}
     banner = BannerState()
-    backoff: dict[str, float] = {}
     health = health if health is not None else {}
-    health.update({"source": "t.me/s", "interval": interval, "channels": {ch: {"ok": None} for ch in channels}})
-    async with httpx.AsyncClient(headers=HEADERS, timeout=20, follow_redirects=True) as client:
-        log.info("читаем %d каналов через t.me/s каждые %d с", len(channels), interval)
+    health.update({"source": "t.me/s", "interval": interval, "warming": True,
+                   "channels": {ch: {"ok": None} for ch in channels}})
+    sem = asyncio.Semaphore(CONCURRENCY)
+
+    async def watch(channel: str, first_delay: float) -> None:
+        state, fails = health["channels"][channel], 0
+        await asyncio.sleep(first_delay)
         while True:
-            health["banners_down"] = banner.down  # /api/health: не скачиваются ли картинки-баннеры
-            started = time.monotonic()
-            step = interval / max(len(channels), 1)
-            for channel in channels:
-                if backoff.get(channel, 0) > time.monotonic():
-                    continue
-                state = health["channels"][channel]
+            delay = interval * random.uniform(0.85, 1.15)
+            async with sem:
                 try:
                     await poll_channel(client, channel, last_seen, on_message, history_s, banner)
-                    backoff.pop(channel, None)
+                    fails = 0
                     state.update(ok=True, last_ok=time.time(), error=None)
                 except Exception as exc:
-                    # временная ошибка или лимит t.me — пропускаем канал на пару минут
+                    # временная ошибка или лимит t.me: ждём дольше с каждой неудачей, но не больше BACKOFF_MAX_S
+                    fails += 1
                     log.warning("канал %s: %s", channel, exc)
-                    backoff[channel] = time.monotonic() + 120 + random.uniform(0, 60)
+                    delay = min(60 * 2 ** (fails - 1), BACKOFF_MAX_S) + random.uniform(0, 30)
                     state.update(ok=False, last_error=time.time(), error=f"{type(exc).__name__}: {exc}"[:200])
-                await asyncio.sleep(step * random.uniform(0.6, 1.0))
-            await asyncio.sleep(max(0.0, interval - (time.monotonic() - started)))
+            await asyncio.sleep(delay)
+
+    async with httpx.AsyncClient(headers=HEADERS, timeout=20, follow_redirects=True) as client:
+        log.info("читаем %d каналов через t.me/s каждые %d с", len(channels), interval)
+        history = await warm_up(client, channels, last_seen, history_s, banner, health, sem)
+        for t, channel, mid, text in history:
+            await on_message(channel, mid, t, text)
+        health["warming"] = False
+        log.info("история загружена: %d сообщений, каналов прочитано %d из %d", len(history),
+                 sum(1 for c in health["channels"].values() if c.get("ok")), len(channels))
+        # дальше каждый канал живёт по своему графику; старты разнесены по интервалу
+        n = max(len(channels), 1)
+        watchers = [asyncio.create_task(watch(ch, interval * (i + 1) / n)) for i, ch in enumerate(channels)]
+
+        async def bookkeeping() -> None:
+            while True:
+                health["banners_down"] = banner.down  # /api/health: не скачиваются ли картинки-баннеры
+                await asyncio.sleep(10)
+        try:
+            await bookkeeping()
+        finally:
+            for task in watchers:
+                task.cancel()

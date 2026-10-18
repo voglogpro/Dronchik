@@ -5,7 +5,9 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from .forecast import ForecastParser
-from .gazetteer import Gazetteer, normalize
+from .geo import bearing_deg
+from .gazetteer import DATA_DIR, Gazetteer, normalize
+from .origin import OriginFinder
 from .launches import RX_LAUNCH, LaunchBoard, LaunchDetector
 from .parser import RX_FORECAST, CLEAR, DESTROYED, ENGAGED, HEADING, MISSILE_ALERT, SIGHTING, UAV_ALERT, UAV_WARN, MessageParser
 from .tracker import TRACK_TTL_S, Tracker
@@ -15,10 +17,10 @@ MISSILE_ALERT_TTL_S = 3600
 DISTRICT_ALERT_TTL_S = 50 * 60   # район подсвечиваем, пока по нему свежие фиксации
 PREDICT_WARN_MINUTES = 60        # регион «жёлтый», если прогноз заходит в него в течение часа
 DISTRICT_PREDICT_WARN_MINUTES = 30  # для районов горизонт короче, иначе жёлтым красится полобласти
-SHOOTDOWN_SHOW_S = 40 * 60       # сколько показывать отметку сбития
+SHOOTDOWN_SHOW_S = 12 * 60       # сколько показывать отметку сбития (и путь сбитой цели)
 FORECAST_SHOW_S = 14 * 3600      # «прогноз на ночь» актуален до утра
 ENGAGED_SHOW_S = 10 * 60         # «под прицелом ПВО» — пока свежие сообщения о работе ПВО
-OLD_TRACK_SHOW_S = 40 * 60       # потерянные и сбитые цели остаются на карте столько после последней фиксации
+OLD_TRACK_SHOW_S = 12 * 60       # потерянные и сбитые цели остаются на карте столько после последней фиксации/сбития
 LONE_TRACK_SHOW_S = 15 * 60      # одна фиксация без второй точки: курса нет, держим недолго
 
 @dataclass
@@ -68,6 +70,7 @@ class Engine:
         self.launches = LaunchBoard()
         self.parser = MessageParser(gazetteer)
         self.forecast_parser = ForecastParser(gazetteer)
+        self.origins = OriginFinder(DATA_DIR)
         self.tracker = Tracker(gazetteer)
         self.channel_regions = channel_regions or {}
         self.alerts: dict[str, RegionAlert] = {}
@@ -126,7 +129,7 @@ class Engine:
                 for did in ev.district_ids:
                     self._raise(self.district_alerts, did, "warn", t, channel, announced=True)
             elif ev.kind == SIGHTING:
-                self.tracker.add_sighting(ev.place, t, channel, ev.count, ev.target, ev.bearing)
+                self.tracker.add_sighting(ev.place, t, channel, ev.count, ev.target, ev.bearing, group=(channel, msg_id or t))
                 self._raise(self.alerts, ev.place.region_id, "uav", t, channel)
                 for did in ev.district_ids:
                     self._raise(self.district_alerts, did, "uav", t, channel)
@@ -212,7 +215,7 @@ class Engine:
             alive = tr.status == "active" and age <= TRACK_TTL_S
             if len(tr.points) == 1 and age > LONE_TRACK_SHOW_S:
                 continue
-            if not alive and age > OLD_TRACK_SHOW_S:
+            if not alive and now - (tr.end[2] if tr.end else tr.last.t) > (OLD_TRACK_SHOW_S if tr.end or age > TRACK_TTL_S else 0):
                 continue
             item = {
                 "id": tr.id,
@@ -220,6 +223,8 @@ class Engine:
                 "count": max(tr.count, 1),
                 "engaged": tr.status == "active" and tr.engaged_at is not None and now - tr.engaged_at <= ENGAGED_SHOW_S,
                 "target": tr.target.name if tr.target else None,
+                "origin": self._origin(tr),
+                "end": {"lat": tr.end[0], "lon": tr.end[1], "t": tr.end[2]} if tr.end else None,
                 "points": [
                     {"lat": p.lat, "lon": p.lon, "t": p.t, "place": p.place, "region": p.region_id,
                      "district": p.district_id, "district_name": self._district_name(p.district_id),
@@ -318,6 +323,15 @@ class Engine:
             marks.append({"lat": r.center[0], "lon": r.center[1], "level": a.status, "name": r.name,
                           "region": rid, "district": None, "channels": sorted(a.channels), "updated": a.updated})
         return marks
+
+    def _origin(self, tr) -> dict | None:
+        """Примерная точка вылета: у границы Украины, по курсу первых фиксаций или ближайшая."""
+        bearing = None
+        if tr.target:
+            bearing = bearing_deg(tr.points[0].lat, tr.points[0].lon, tr.target.lat, tr.target.lon)
+        elif tr.bearing_hint is not None and len(tr.points) == 1:
+            bearing = tr.bearing_hint
+        return self.origins.estimate([(p.lat, p.lon) for p in tr.points], bearing)
 
     def _district_name(self, did: str | None) -> str | None:
         return self.gaz.districts[did].name if did else None

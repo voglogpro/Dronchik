@@ -14,6 +14,7 @@ from shapely.geometry import Point, shape
 from shapely.prepared import prep
 
 from .geo import haversine_km
+from .settlements import Settlements
 
 # справочники только для чтения; data/ — для изменяемых файлов (база, сессия), её хостинги часто монтируют как хранилище
 DATA_DIR = Path(__file__).resolve().parent.parent / "geodata"
@@ -226,6 +227,9 @@ class Gazetteer:
         self._place_res = [(re.compile(p), pl) for p, pl in sorted(patterns, key=lambda x: -len(x[0]))]
         self.by_name = {normalize(p.name): p for p in self.places}
 
+        settlements_file = data_dir / "settlements.json"
+        self.settlements = Settlements(settlements_file) if settlements_file.exists() else None
+
     def find(self, text: str, context_region: str | None = None, loose: bool = False) -> list[Mention]:
         """Все упоминания регионов, районов и городов в тексте, без пересечений, в порядке появления.
 
@@ -273,8 +277,24 @@ class Gazetteer:
         scan(self._place_res)
         # названия-существительные («Ступино», «Донецк») слишком многозначны — только в известной области
         scan_districts(self._district_noun_res, need_context=not loose)
+        found += self._villages(text, norm, taken, found, context_region)
         found.sort(key=lambda x: x.start)
         return found
+
+    def _villages(self, text: str, norm: str, taken: list[bool], found: list[Mention], context_region: str | None) -> list[Mention]:
+        """Сёла и посёлки из большого справочника — только внутри упомянутого района или области."""
+        if self.settlements is None or len(text) != len(norm):
+            return []
+        regions = {m.place.region_id for m in found} or ({context_region} if context_region else set())
+        districts = {m.place.district_id for m in found if m.place.kind == "district" and m.place.district_id}
+        out = []
+        for start, end, it in self.settlements.find(text, norm, taken, regions, districts):
+            rid = self.settlements.region_ids[it[3]]
+            did = self.settlements.district_ids[it[4]] if it[4] >= 0 else None
+            for k in range(start, end):
+                taken[k] = True
+            out.append(Mention(start, end, Place(it[0], rid, it[1], it[2], kind="city", district_id=did)))
+        return out
 
     def map_labels(self) -> list[dict]:
         """Города для подписей на карте; первый город региона в places.json — его центр."""

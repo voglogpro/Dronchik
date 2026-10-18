@@ -235,3 +235,44 @@ def test_forecast_vectors_ldnr_and_new_regions(gaz):
 def test_new_regions_from_lpr1(parser, text, expected):
     ev = parser.parse(text)
     assert sorted({r for e in ev for r in e.region_ids}) == sorted(expected)
+
+
+# ---- справочник сёл, цели списком, список районов одного сообщения ----
+
+def _sightings(parser, text):
+    return [e for e in parser.parse(text) if e.kind == SIGHTING]
+
+
+def test_village_inside_named_district_gets_precise_point(parser, gaz):
+    (e,) = _sightings(parser, "Куликовка, Кантемировский район, Воронежская область - пролёт БПЛА в сторону Волоконовка, Кантемировского района.")
+    assert e.place.name == "Куликовка" and e.place.district_id == "voronezh-oblast/kantemirovskiy-rayon"
+    assert e.target.name == "Волоконовка" and abs(e.target.lat - 49.84) < 0.1
+    # район отдельной точкой не рисуется — только село
+
+
+def test_village_name_without_context_is_ignored(parser):
+    # «Куликовка» есть в десятках областей: без района или области точку не ставим
+    assert _sightings(parser, "Куликовка БПЛА") == []
+    # слова из текста тревог не принимаем за хутора («далее» ≈ посёлок Даль, «северо-восток»)
+    text = "Группа БПЛА на северо-восток, далее в направлении тыла\nКурская область"
+    assert [e.place.name for e in parser.parse(text) if e.place] == []
+
+
+def test_all_places_after_direction_are_targets(parser):
+    events = _sightings(parser, "От Суджи фиксации БПЛА в направлении Льгов, Курчатов\nКурская область")
+    assert [(e.place.name, e.target.name) for e in events] == [("Суджа", "Льгов")]
+
+
+def test_direction_line_between_place_and_alert_is_kept(parser):
+    text = "Ливенка, Павловский район \nИ далее в направлении Бутурлиновка \nТревога по БПЛА \nВоронежская область"
+    events = _sightings(parser, text)
+    assert [(e.place.name, e.target.name) for e in events] == [("Ливенка", "Бутурлиновка")]
+
+
+def test_list_of_districts_in_one_message_is_not_a_route(gaz):
+    e = Engine(gaz)
+    e.process("vrv_radar", "Петропавловский район\nРоссошанский район\nПодгоренский район\nКаменский район\n"
+              "Острогожский район\nНижнедевицкий район\nВоронежская область\nФиксации БПЛА", T0, 1)
+    snap = e.snapshot(T0 + 60)
+    # шесть одновременных фиксаций — шесть целей, а не один «маршрут» через все районы
+    assert len(snap["tracks"]) == 6 and all(len(t["points"]) == 1 for t in snap["tracks"])

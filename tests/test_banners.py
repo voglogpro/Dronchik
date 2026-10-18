@@ -187,3 +187,34 @@ def test_banner_cdn_down_breaker_stops_waiting():
     # три опроса подряд первый пост ждёт картинку; затем CDN считается недоступным и все посты разбираются сразу
     got, state = _run_polls(ok_after=10**6, n_polls=3, posts=posts)
     assert state.down and [m for m, _ in got] == [100, 101, 102, 103, 104]
+
+
+def test_warm_up_replays_history_in_time_order():
+    import asyncio
+    import httpx
+    from app import web_source
+
+    def page(channel, items):
+        blocks = "".join(
+            f'<div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message" data-post="{channel}/{mid}">'
+            f'<div class="tgme_widget_message_text js-message_text" dir="auto">{text}</div>'
+            f'<a class="tgme_widget_message_date"><time datetime="{ts}">x</time></a></div></div>' for mid, ts, text in items)
+        return httpx.Response(200, text=blocks)
+
+    import time
+    base = time.time()
+    iso = lambda m: __import__("datetime").datetime.fromtimestamp(base - m * 60, __import__("datetime").timezone.utc).isoformat()
+    pages = {"a": page("a", [(1, iso(50), "a1"), (2, iso(20), "a2")]), "b": page("b", [(1, iso(40), "b1"), (2, iso(10), "b2")])}
+
+    def handler(request):
+        return pages[request.url.path.split("/")[-1]]
+
+    health = {"channels": {"a": {"ok": None}, "b": {"ok": None}}}
+
+    async def main():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await web_source.warm_up(client, ["a", "b"], {}, 3600, web_source.BannerState(), health, asyncio.Semaphore(2))
+
+    rows = asyncio.run(main())
+    assert [r[3] for r in rows] == ["a1", "b1", "a2", "b2"]      # по времени, а не канал за каналом
+    assert health["channels"]["a"]["ok"] and health["channels"]["b"]["ok"]

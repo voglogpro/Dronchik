@@ -113,15 +113,27 @@ def _split_targets(line: str, mentions: list[Mention]) -> tuple[list[Mention], M
     seen = []
     for m in RX_TARGET.finditer(line):
         after = [x for x in mentions if x.start >= m.end() and x.start - m.end() <= 3]
-        if after:
-            target = after[0]
-            seen.append(target)
+        if not after:
+            continue
+        # «в направлении Льгов, Курчатов»: все места через запятую или «и» — куда летит, а не где замечен
+        chain = [after[0]]
+        for x in sorted((x for x in mentions if x.start > after[0].end), key=lambda x: x.start):
+            if re.fullmatch(r"[\s,;]*(?:и\s+)?(?:далее\s+)?", line[chain[-1].end:x.start]) and x.place.kind != "region":
+                chain.append(x)
+            else:
+                break
+        target = target or chain[0]
+        seen += chain
     return [x for x in mentions if x not in seen], target
 
 
 # «Жёлтый уровень опасности по БПЛА» (баннер «Купола России») — внимание, ещё не тревога
 RX_WARN = re.compile(r"ж[её]лт\w*\s+уров")
 RX_STATUS = re.compile("|".join(rx.pattern for rx in (RX_CLEAR, RX_WARN, RX_MISSILE, RX_UAV_ALERT, RX_DRONE, RX_DESTROYED, RX_ENGAGED)))
+
+
+# продолжение «шапки» с местами: «И далее в направлении Бутурлиновка» между местом и словом «Тревога»
+RX_CONT = re.compile(r"^(?:и\s+)?(?:далее\s+)?(?:возможно\s+)?(?:в\s+направлении|в\s+сторону|курсом\s+на|на)\s+\S")
 
 
 def _lines(text: str, gaz: Gazetteer) -> list[str]:
@@ -136,7 +148,8 @@ def _lines(text: str, gaz: Gazetteer) -> list[str]:
         if not line or RX_BOILERPLATE.search(line) or RX_ADVICE.search(line):
             continue
         # короткая строка без статуса — «шапка» с местами («Дмитровский район», «Орловская область»)
-        if not RX_STATUS.search(line) and not RX_MOVE.search(line) and len(line) <= 60 and gaz.find(line, None, loose=True):
+        if not RX_STATUS.search(line) and len(line) <= 60 and (
+                (not RX_MOVE.search(line) and gaz.find(line, None, loose=True)) or (pending and RX_CONT.match(line))):
             pending.append(line)
             continue
         out.append(", ".join([*pending, line]) if pending else line)
@@ -165,6 +178,9 @@ class MessageParser:
             if RX_REPORT.search(line):
                 continue
             mentions = self.gaz.find(line, context_region)
+            # район не рисуем отдельной точкой, если в нём названо конкретное село или город
+            precise = {m.place.district_id for m in mentions if m.place.kind == "city" and m.place.district_id}
+            mentions = [m for m in mentions if not (m.place.kind == "district" and m.place.district_id in precise)]
             region_ids = list(dict.fromkeys(m.place.region_id for m in mentions))
             district_ids = list(dict.fromkeys(m.place.district_id for m in mentions if m.place.district_id))
             if region_ids:

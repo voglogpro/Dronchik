@@ -4,7 +4,7 @@
   const cfg = window.APP_CONFIG || {};
   const tg = window.Telegram && window.Telegram.WebApp;
   if (tg && tg.initData) { tg.ready(); tg.expand(); document.documentElement.classList.add("tg"); }
-  const COLORS = { missile: "#e5484d", uav: "#f2762e", warn: "#efe08a", predicted: "#f5c24c", launch: "#a99cf0", forecast: "#8fb3d9" };
+  const COLORS = { track: "#ff5a5f", missile: "#e5484d", uav: "#f2762e", warn: "#efe08a", predicted: "#f5c24c", launch: "#a99cf0", forecast: "#8fb3d9" };
   const LABELS = { missile: "Ракетная опасность", uav: "Угроза БПЛА", warn: "Внимание по БПЛА", predicted: "Вероятный подлёт" };
   const SEVERITY = { missile: 4, uav: 3, warn: 2, predicted: 1 };
   const BASIS = { target: "по заявленному курсу", observed: "по фиксациям", hint: "по направлению", alert: "по новой тревоге в соседней области" };
@@ -42,9 +42,10 @@
     zoom: window.innerWidth < 720 ? 4.2 : 4.6,
     minZoom: 2,
     maxZoom: 12,
-    attributionControl: { compact: true, customAttribution: "Границы: © участники OpenStreetMap" },
+    attributionControl: { compact: true, customAttribution: "Границы: © участники OpenStreetMap · Пункты: GeoNames (CC BY 4.0)" },
   });
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+  window.dronchikMap = map;   // для отладки и скриншотов
   // на телефоне нижнюю часть карты закрывает панель — центрируем по видимой области
   const isPhone = () => window.innerWidth < 720;
   // нижнюю часть карты (на телефоне) или левую (на компьютере) закрывает панель — центрируем по видимой области
@@ -149,7 +150,7 @@
     map.addLayer({
       id: "forecast-vectors", type: "line", source: "forecast",
       layout: { "line-cap": "round" },
-      paint: { "line-color": COLORS.forecast, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1.2, 7, 2], "line-opacity": 0.55, "line-dasharray": [2, 3] },
+      paint: { "line-color": COLORS.forecast, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1, 7, 1.6], "line-opacity": 0.38, "line-dasharray": [2, 3] },
     }, "launch-routes");
     // тепловая карта пролётов за период — под всеми слоями целей
     map.addSource("heat", { type: "geojson", data: empty() });
@@ -164,30 +165,32 @@
           0, "rgba(0,0,0,0)", 0.15, "#3b2a6b", 0.4, "#8e3b8f", 0.65, "#e0663a", 0.9, "#f5c24c", 1, "#fff3c4"],
       },
     }, "launch-routes");
-    map.addSource("cones", { type: "geojson", data: empty() });
+    map.addSource("origins", { type: "geojson", data: empty() });
     map.addSource("predicted", { type: "geojson", data: empty() });
     map.addSource("observed", { type: "geojson", data: empty() });
     map.addSource("fixes", { type: "geojson", data: empty() });
 
-    // конусы неопределённости — только при приближении: при налёте на весь регион они сливаются в пятно
-    map.addLayer({ id: "cones", type: "fill", source: "cones", paint: { "fill-color": COLORS.predicted,
-      "fill-opacity": ["interpolate", ["linear"], ["zoom"], 5.5, 0, 7, 0.13] } });
-    map.addLayer({ id: "cones-edge", type: "line", source: "cones", paint: { "line-color": COLORS.predicted, "line-width": 1,
-      "line-opacity": ["interpolate", ["linear"], ["zoom"], 5.5, 0, 7, 0.35] } });
+    // примерный путь от границы Украины до первой фиксации — тонкий пунктир под остальными линиями цели
+    map.addLayer({
+      id: "origins", type: "line", source: "origins",
+      layout: { "line-cap": "round" },
+      paint: { "line-color": COLORS.track, "line-width": 1.4, "line-dasharray": [1, 2.2],
+        "line-opacity": ["case", ["==", ["get", "status"], "active"], ["case", ["get", "single"], 0.3, 0.55], 0.25] },
+    });
     map.addLayer({
       id: "predicted", type: "line", source: "predicted",
-      paint: { "line-color": COLORS.predicted, "line-width": 2.5, "line-dasharray": [2, 1.5] },
+      paint: { "line-color": COLORS.predicted, "line-width": 2, "line-dasharray": [2, 1.5], "line-opacity": 0.9 },
     });
     map.addLayer({
       id: "observed", type: "line", source: "observed",
       layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": "#ff5a5f", "line-width": 3, "line-opacity": ["case", ["==", ["get", "status"], "active"], 0.95, 0.35] },
+      paint: { "line-color": "#ff5a5f", "line-width": 2, "line-opacity": ["case", ["==", ["get", "status"], "active"], 0.95, 0.35] },
     });
     map.addLayer({
       id: "fixes", type: "circle", source: "fixes",
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 3, 8, 6],
-        "circle-color": "#ff5a5f", "circle-stroke-color": "#fff", "circle-stroke-width": 1.2,
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 2, 8, 4.5],
+        "circle-color": "#ff5a5f", "circle-stroke-color": "#fff", "circle-stroke-width": 0.8,
         "circle-opacity": ["case", ["==", ["get", "status"], "active"], 1, 0.4],
         "circle-stroke-opacity": ["case", ["==", ["get", "status"], "active"], 1, 0.4],
       },
@@ -267,10 +270,13 @@
       }
     }
 
-    const cones = [], predicted = [], observed = [], fixes = [], seen = new Set();
+    const predicted = [], observed = [], origins = [], fixes = [], seen = new Set();
     for (const tr of state.tracks) {
       const coords = tr.points.map((p) => [p.lon, p.lat]);
+      // у сбитой цели путь заканчивается там, где её сбили
+      if (tr.end) coords.push([tr.end.lon, tr.end.lat]);
       if (coords.length > 1) observed.push(line(coords, { status: tr.status }));
+      if (tr.origin) origins.push(line([[tr.origin.lon, tr.origin.lat], coords[0]], { status: tr.status, single: tr.points.length < 2 }));
       tr.points.forEach((p) => fixes.push(point([p.lon, p.lat], { status: tr.status })));
       if (tr.status !== "active") continue;
       const pr = tr.prediction;
@@ -279,12 +285,11 @@
       if (pr) {
         // пунктир от последней фиксации: значок дрона едет по нему между обновлениями
         predicted.push(line([[last.lon, last.lat], ...pr.path.map(([la, lo]) => [lo, la])], {}));
-        cones.push({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [pr.cone.map(([la, lo]) => [lo, la])] } });
       }
       seen.add(tr.id);
       placeDrone(tr, pos, pr ? pr.bearing : null, state.now);
     }
-    map.getSource("cones").setData(fc(cones));
+    map.getSource("origins").setData(fc(origins));
     map.getSource("predicted").setData(fc(predicted));
     map.getSource("observed").setData(fc(observed));
     map.getSource("fixes").setData(fc(fixes));
@@ -481,6 +486,8 @@
     el.setAttribute("aria-label", bearing == null ? `Цель #${tr.id}, курс неизвестен` : `Цель #${tr.id}`);
     el.querySelector("svg").style.transform = `rotate(${bearing ?? 0}deg)`;
     el.classList.toggle("no-course", bearing == null);
+    // давно не обновлявшаяся цель бледнеет: скоро она пропадёт с карты
+    el.style.opacity = (now - tr.points[tr.points.length - 1].t) > 18 * 60 ? "0.55" : "1";
     el.classList.toggle("engaged", !!tr.engaged);
     el.querySelector("span").textContent = tr.count > 1 ? `×${tr.count}` : "";
     m.getPopup().setHTML(trackPopup(tr, now));
@@ -504,11 +511,16 @@
   }
 
   // Подробная карта по коду доступа; без кода — только тревоги по областям и районам
+  let accessWasFull = null;
   function renderAccess(state) {
     const full = state.mode === "full";
     const section = $("access-section");
     section.hidden = !(cfg.accessCodes || full);
     section.classList.toggle("unlocked", full);
+    if (full !== accessWasFull) {
+      accessWasFull = full;
+      if (store.get("fold:access") === null) autoOpen(section, !full);   // без кода — раскрыта, с кодом — свёрнута
+    }
     $("access-state").textContent = full ? "включена" : "для своих · по коду доступа";
     $("access-text").textContent = full
       ? "Вы видите подробную карту. Это расчётная схема по сообщениям каналов, а не реальное положение объектов. Не пересылайте её."
@@ -535,37 +547,48 @@
   });
 
   // Связь с каналами: «пусто на карте» не должно выглядеть как «угроз нет», если данные просто не приходят
+  let healthDismissedAt = 0;
   function renderHealth(state) {
     const bar = $("health-bar");
-    const chans = Object.values((state.health && state.health.channels) || {});
+    const h = state.health || {};
+    const chans = Object.values(h.channels || {});
     if (cfg.demo || !chans.length) {
       bar.hidden = true;
       $("status-line").textContent = `${cfg.demo ? "ДЕМО · " : ""}обновлено ${hhmm(state.now)}`;
       return;
     }
     const ok = chans.filter((c) => c.ok);
+    const failed = chans.filter((c) => c.ok === false);
     const lastOk = Math.max(0, ...chans.map((c) => c.last_ok || 0));
-    const interval = (state.health && state.health.interval) || 30;
+    const interval = h.interval || 30;
     const staleMin = lastOk ? Math.round((state.now - lastOk) / 60) : null;
-    $("status-line").textContent = `${ok.length ? "онлайн" : "нет связи"} · ${ok.length}/${chans.length} каналов · обновлено ${hhmm(state.now)}`;
-    if (!ok.length && chans.some((c) => c.ok === false)) {
-      const err = chans.find((c) => c.error);
-      bar.className = "health-bar";
-      bar.textContent = `Нет связи с Telegram-каналами — карта не обновляется${staleMin != null ? ` (последние данные ${staleMin} мин назад)` : ""}.`
-        + (err ? ` Ошибка: ${err.error}` : "");
-      bar.hidden = false;
-    } else if (lastOk && state.now - lastOk > interval * 6) {
-      bar.className = "health-bar stale";
-      bar.textContent = `Каналы давно не читались (${staleMin} мин) — данные могут быть устаревшими.`;
-      bar.hidden = false;
-    } else if (ok.length && ok.length < chans.length / 2) {
-      bar.className = "health-bar stale";
-      bar.textContent = `Читается только ${ok.length} из ${chans.length} каналов — часть сообщений может не попасть на карту.`;
-      bar.hidden = false;
-    } else {
+    let text = "", cls = "health-bar";
+    if (h.warming) {
+      // после перезапуска сервер сначала загружает историю каналов: это не поломка
+      $("status-line").textContent = `загружаем историю · ${ok.length}/${chans.length} каналов`;
       bar.hidden = true;
+      return;
     }
+    $("status-line").textContent = `${ok.length ? "онлайн" : "нет связи"} · ${ok.length}/${chans.length} каналов · обновлено ${hhmm(state.now)}`;
+    if (!ok.length && failed.length) {
+      const err = failed.find((c) => c.error);
+      text = `Нет связи с Telegram-каналами — карта не обновляется${staleMin != null ? ` (последние данные ${staleMin} мин назад)` : ""}.`
+        + (err ? ` Ошибка: ${err.error}` : "");
+    } else if (lastOk && state.now - lastOk > interval * 6) {
+      cls = "health-bar stale";
+      text = `Каналы давно не читались (${staleMin} мин) — данные могут быть устаревшими.`;
+    } else if (failed.length >= Math.max(3, chans.length / 3)) {
+      cls = "health-bar stale";
+      const err = failed.find((c) => c.error);
+      text = `Не читается ${failed.length} из ${chans.length} каналов — часть сообщений может не попасть на карту.` + (err ? ` (${err.error})` : "");
+    }
+    // закрытое сообщение не возвращается 15 минут, пока причина та же
+    const hidden = !text || (healthDismissedAt && Date.now() - healthDismissedAt < 15 * 60 * 1000);
+    $("health-text").textContent = text;
+    bar.className = cls;
+    bar.hidden = hidden;
   }
+  $("health-close").addEventListener("click", () => { healthDismissedAt = Date.now(); $("health-bar").hidden = true; });
 
   // Что за сообщение: по самому важному из распознанных событий
   const FEED_LEVELS = [
@@ -838,9 +861,31 @@
     ? cfg.channels.map((c) => `<span>@${esc(c.channel)}</span>`).join("")
     : `<span>список — в пользовательском соглашении</span>`;
 
-  $("legend-toggle").addEventListener("click", () => {
-    const open = $("legend").classList.toggle("open");
+  const setLegend = (open) => {
+    $("legend").classList.toggle("open", open);
     $("legend-toggle").setAttribute("aria-expanded", String(open));
+    store.set("legendOpen", open ? "1" : "0");
+  };
+  $("legend-toggle").addEventListener("click", () => setLegend(!$("legend").classList.contains("open")));
+  $("legend").classList.toggle("open", store.get("legendOpen") === "1");
+  $("legend-toggle").setAttribute("aria-expanded", String(store.get("legendOpen") === "1"));
+
+  // Блоки панели сворачиваются; выбор запоминается (по умолчанию открыты ключевые, остальные свёрнуты)
+  const FOLD_DEFAULT_CLOSED = new Set(["forecast", "heat", "launch", "sources"]);
+  // программное раскрытие/сворачивание не считается выбором пользователя и не запоминается
+  function autoOpen(d, open) {
+    if (d.open === open) return;
+    d.dataset.auto = "1";
+    d.open = open;
+  }
+  document.querySelectorAll("details[data-fold]").forEach((d) => {
+    const saved = store.get(`fold:${d.dataset.fold}`);
+    if (saved === "0" || (saved === null && FOLD_DEFAULT_CLOSED.has(d.dataset.fold))) autoOpen(d, false);
+    if (saved === "1") autoOpen(d, true);
+    d.addEventListener("toggle", () => {
+      if (d.dataset.auto) { delete d.dataset.auto; return; }
+      store.set(`fold:${d.dataset.fold}`, d.open ? "1" : "0");
+    });
   });
 
   // Панель убирается целиком (крестик), вернуть — кнопкой «Обстановка»; выбор запоминается

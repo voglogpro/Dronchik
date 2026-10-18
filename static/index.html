@@ -79,7 +79,7 @@
     </form>
   </div>
 
-  <div id="health-bar" class="health-bar" role="status" hidden></div>
+  <div id="health-bar" class="health-bar" role="status" hidden><span id="health-text"></span><button type="button" id="health-close" class="health-close" aria-label="Скрыть сообщение">×</button></div>
 
   <button type="button" id="panel-open" class="panel-open" aria-controls="panel" hidden>
     <span class="dot" aria-hidden="true"></span><span id="panel-open-text">Обстановка</span>
@@ -99,8 +99,8 @@
     </header>
 
     <div class="panel-body">
-      <section id="access-section" class="access-card" hidden aria-labelledby="access-title">
-        <div class="access-top">
+      <details id="access-section" class="access-card fold" data-fold="access" open hidden>
+        <summary class="access-top">
           <span class="access-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>
           </span>
@@ -108,7 +108,8 @@
             <h2 id="access-title">Подробная карта</h2>
             <p id="access-state" class="sub">для своих · по коду доступа</p>
           </div>
-        </div>
+          <span class="chev" aria-hidden="true"></span>
+        </summary>
         <p id="access-text" class="access-text"></p>
         <ul class="access-perks">
           <li>Значки целей, плавно движущиеся по расчётной скорости</li>
@@ -125,13 +126,13 @@
         <p id="access-error" class="access-error" role="alert" hidden></p>
         <p id="access-hint" class="sub">Кода нет? Его выдаёт владелец сайта.</p>
         <button type="button" id="access-logout" class="btn" hidden>Вернуться к публичной карте</button>
-      </section>
+      </details>
 
-      <section class="purpose-notice" aria-label="Цель проекта">
-        <strong>Для безопасности жителей России</strong>
+      <details class="purpose-notice fold" data-fold="purpose" open>
+        <summary><strong>Для безопасности жителей России</strong><span class="chev" aria-hidden="true"></span></summary>
         <p>Сообщения открытых каналов могут ошибаться. Всё нарисованное — схема, не радар. Действуйте по официальным сигналам МЧС и властей.</p>
         <button type="button" id="purpose-open" class="btn">О цели проекта и ограничениях</button>
-      </section>
+      </details>
 
       <section class="summary" id="summary"></section>
 
@@ -148,30 +149,31 @@
         <button id="notify-btn" class="btn" hidden>Включить уведомления</button>
       </section>
 
-      <section id="forecast" class="forecast" hidden aria-labelledby="forecast-title">
-        <div class="forecast-head">
+      <details id="forecast" class="forecast fold" data-fold="forecast" hidden>
+        <summary class="forecast-head">
           <h2 id="forecast-title">Прогноз на ночь</h2>
           <span id="forecast-expected" class="forecast-expected" hidden></span>
-        </div>
+          <span class="chev" aria-hidden="true"></span>
+        </summary>
         <ul id="forecast-directions" class="forecast-directions"></ul>
         <ul id="forecast-notes" class="forecast-notes"></ul>
         <details class="forecast-raw"><summary>Текст канала</summary><p id="forecast-text"></p></details>
         <p class="sub" id="forecast-meta"></p>
-      </section>
+      </details>
 
-      <section>
-        <h2>Лента тревог</h2>
+      <details class="fold sec" data-fold="feed" open>
+        <summary><h2>Лента тревог</h2><span class="chev" aria-hidden="true"></span></summary>
         <p class="sub feed-sub" id="feed-sub">Что наш бот прочитал в открытых каналах. Нажмите на сообщение — карта покажет область.</p>
         <ul id="feed" class="list feed"></ul>
-      </section>
+      </details>
 
-      <section data-layer="tracks">
-        <h2>Цели и прогноз маршрута</h2>
+      <details class="fold sec" data-fold="tracks" data-layer="tracks" open>
+        <summary><h2>Цели и маршруты</h2><span class="chev" aria-hidden="true"></span></summary>
         <ul id="track-list" class="list"></ul>
-      </section>
+      </details>
 
-      <section id="heat-section" data-layer="heatmap">
-        <h2>История пролётов</h2>
+      <details id="heat-section" class="fold sec" data-fold="heat" data-layer="heatmap">
+        <summary><h2>История пролётов</h2><span class="chev" aria-hidden="true"></span></summary>
         <div class="seg" role="group" aria-label="Период тепловой карты">
           <button type="button" data-days="0" aria-pressed="true">Выкл</button>
           <button type="button" data-days="1" aria-pressed="false">24 ч</button>
@@ -180,24 +182,24 @@
         </div>
         <p id="heat-summary" class="sub note" hidden></p>
         <ol id="heat-top" class="heat-top" hidden></ol>
-      </section>
+      </details>
 
-      <section id="launch-section" hidden>
-        <h2>Пуски и возможный подлёт</h2>
+      <details id="launch-section" class="fold sec" data-fold="launch" hidden>
+        <summary><h2>Пуски и возможный подлёт</h2><span class="chev" aria-hidden="true"></span></summary>
         <ul id="launch-list" class="list"></ul>
         <p class="sub note">Время — ориентир для подготовки, а не точный прогноз: по крейсерской скорости 150–185 км/ч
           (реактивные — 350–450 км/ч), без учёта манёвров. Регионы по пускам не окрашиваются.</p>
-      </section>
+      </details>
 
       <figure id="quote" class="quote" hidden>
         <blockquote id="quote-text"></blockquote>
         <figcaption id="quote-author"></figcaption>
       </figure>
 
-      <section id="sources-section" hidden>
-        <h2>Каналы-источники</h2>
+      <details id="sources-section" class="fold sec" data-fold="sources" hidden>
+        <summary><h2>Каналы-источники</h2><span class="chev" aria-hidden="true"></span></summary>
         <ul id="sources" class="list sources"></ul>
-      </section>
+      </details>
 
       <p class="disclaimer"><a href="terms.html" target="_blank" rel="noopener">Пользовательское соглашение</a><br>
         Данные собираются автоматически из открытых каналов, могут запаздывать и содержать ошибки.
@@ -208,7 +210,7 @@
   </aside>
 
   <div class="legend" id="legend" aria-label="Легенда">
-    <button type="button" class="legend-toggle" id="legend-toggle" aria-expanded="false">Легенда</button>
+    <button type="button" class="legend-toggle" id="legend-toggle" aria-expanded="false">Легенда <span class="chev" aria-hidden="true"></span></button>
     <span><i class="sw sw-missile"></i>Ракетная опасность</span>
     <span><i class="sw sw-uav"></i>Угроза БПЛА</span>
     <span><i class="sw sw-warn"></i>Внимание по БПЛА (жёлтый уровень)</span>
@@ -222,8 +224,9 @@
     <span data-layer="launches"><i class="lg-origin"></i>Откуда обычно пуски</span>
     <span data-layer="tracks"><i class="lg-forecast"></i>Прогноз канала на ночь: ожидаемые направления</span>
     <span data-layer="launches"><i class="ln ln-launch"></i>Пуск и примерный маршрут</span>
-    <span data-layer="tracks"><i class="ln ln-obs"></i>Пройденный путь</span>
-    <span data-layer="tracks"><i class="ln ln-pred"></i>Вероятный путь цели</span>
+    <span data-layer="tracks"><i class="ln ln-origin"></i>Примерно откуда вылетел</span>
+    <span data-layer="tracks"><i class="ln ln-obs"></i>Пройденный путь по фиксациям</span>
+    <span data-layer="tracks"><i class="ln ln-pred"></i>Вероятный путь дальше</span>
   </div>
 
   <div id="demo-bar" class="demo-bar" hidden>

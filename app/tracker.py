@@ -33,6 +33,18 @@ TRACK_TTL_S = 30 * 60       # без новых фиксаций трек счи
 SPEED_WINDOW_S = 40 * 60
 # Поток дронов один за другим над одним городом: новая фиксация в уже пройденном месте или «позади»
 # цели — это следующий дрон, а не разворот первого (иначе трек рисует зигзаги и курс «назад»).
+# Подобрано на истории каналов (scripts/replay_history.py): чем строже штраф за поворот, тем меньше «зигзагов»
+# из склеенных разных целей (доля поворотов >60° 49% → 38%), а точность прогноза курса не падает.
+TURN_FREE_DEG = 45.0        # поворот до этого угла при склейке не штрафуется
+TURN_WEIGHT = 1.5           # штраф за поворот сверх TURN_FREE_DEG (до 180°) для цели с надёжным курсом
+SHORT_TRACK_FACTOR = 0.1    # у цели из двух точек курс по одному отрезку ненадёжен — штрафуем в десять раз мягче
+
+
+def turn_penalty(turn: float, n_points: int = 3) -> float:
+    base = TURN_WEIGHT * max(turn - TURN_FREE_DEG, 0) / (180 - TURN_FREE_DEG)
+    return base if n_points >= 3 else base * SHORT_TRACK_FACTOR
+
+
 REVERSAL_DEG = 110.0
 REVERSAL_MIN_KM = 12.0
 REVISIT_KM = 8.0            # «то же место, что одна из прошлых точек трека»
@@ -55,6 +67,7 @@ class TrackPoint:
     district_id: str | None = None
     sources: set[str] = field(default_factory=set)
     count: int = 1
+    group: object = None   # из какого сообщения: места одного сообщения одновременны и в один маршрут не склеиваются
 
 
 @dataclass
@@ -75,6 +88,7 @@ class Track:
     count: int = 1
     engaged_at: float | None = None  # когда последний раз сообщали о работе ПВО по этой цели
     steer: Steer | None = None       # поворот к области с новой тревогой (до следующей фиксации)
+    end: tuple[float, float, float] | None = None  # (lat, lon, t) где сбит: маршрут заканчивается здесь
 
     @property
     def last(self) -> TrackPoint:
@@ -161,7 +175,7 @@ class Tracker:
     # ---- приём событий ----
 
     def add_sighting(self, place: Place, t: float, source: str, count: int = 1,
-                     target: Place | None = None, bearing: float | None = None) -> Track:
+                     target: Place | None = None, bearing: float | None = None, group: object = None) -> Track:
         self.expire(t)
         track = self._duplicate_of(place, t)
         if track:
@@ -170,8 +184,8 @@ class Tracker:
             p.sources.add(source)
             p.count = max(p.count, count)
         else:
-            track = self._associate(place, t, target, bearing)
-            point = TrackPoint(place.lat, place.lon, t, place.name, place.region_id, place.district_id, {source}, count)
+            track = self._associate(place, t, target, bearing, group)
+            point = TrackPoint(place.lat, place.lon, t, place.name, place.region_id, place.district_id, {source}, count, group)
             if track is None:
                 track = Track(next(self._ids), [point])
                 self.tracks.append(track)
@@ -245,6 +259,7 @@ class Tracker:
         track.count -= 1
         if track.count <= 0:
             track.status = "destroyed"
+            track.end = (place.lat, place.lon, t)
         return track
 
     def mark_engaged(self, place: Place, t: float, source: str) -> Track:
@@ -268,9 +283,12 @@ class Tracker:
                     return tr
         return None
 
-    def _associate(self, place: Place, t: float, target: Place | None, bearing: float | None) -> Track | None:
+    def _associate(self, place: Place, t: float, target: Place | None, bearing: float | None,
+                   group: object = None) -> Track | None:
         best, best_cost = None, 1.0
         for tr in self.active(t):
+            if group is not None and any(p.group == group for p in tr.points[-2:]):
+                continue  # «Петропавловский, Россошанский, Подгоренский район — фиксации»: это разные цели, не маршрут
             dt_h = max(t - tr.last.t, 0) / 3600
             gate = GATE_BASE_KM + MAX_SPEED_KMH * dt_h
             d_last = haversine_km(tr.last.lat, tr.last.lon, place.lat, place.lon)
@@ -285,7 +303,7 @@ class Tracker:
             if tr_bearing is not None and d_last > 10:
                 turn = angle_diff(tr_bearing, bearing_deg(tr.last.lat, tr.last.lon, place.lat, place.lon))
                 # повороты на 60–90° у ударных БПЛА обычны (обход ПВО, смена цели); штрафуем только разворот
-                cost += 0.5 * max(turn - 100, 0) / 80
+                cost += turn_penalty(turn, len(tr.points))
             if target and tr.target and tr.target.name == target.name:
                 cost *= 0.6
             if cost < best_cost:
@@ -326,7 +344,13 @@ class Tracker:
         start_lat, start_lon = track.position_at(now)
         elapsed_min = max(now - track.last.t, 0) / 60
         # по одному слову «на север» без второй точки рисуем только короткий отрезок
-        full = HINT_PREDICT_MINUTES if basis in ("hint", "alert") else PREDICT_MINUTES
+        # чем меньше оснований у курса, тем короче прогноз: по двум точкам — 25 мин, по трём и более и до заявленной цели — 60
+        if basis in ("hint", "alert"):
+            full = HINT_PREDICT_MINUTES
+        elif basis == "observed":
+            full = PREDICT_MINUTES if len(track.points) >= 3 else 25
+        else:
+            full = PREDICT_MINUTES
         horizon = max(full - elapsed_min, PREDICT_STEP_MIN)
         max_dist = speed * horizon / 60
         goal = track._goal()

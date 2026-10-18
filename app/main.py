@@ -40,6 +40,7 @@ heatmap = Heatmap(engine.parser, store, settings.channel_regions)
 access = Access(settings.access_codes, settings.access_secret,
                 public_full=settings.public_level == "full" or (settings.demo and not settings.access_codes))
 clients: dict[WebSocket, bool] = {}  # соединение -> подробная карта (есть код доступа)
+dirty = asyncio.Event()              # появились новые данные — пора разослать снимок
 
 
 def now() -> float:
@@ -74,6 +75,16 @@ async def on_message(channel: str, msg_id: int, t: float, text: str) -> None:
         return
     heatmap.invalidate()
     if engine.process(channel, text, t, msg_id):
+        dirty.set()
+
+
+async def notifier() -> None:
+    """Рассылаем снимок не чаще двух раз в секунду: при загрузке истории сообщения идут сотнями,
+    а пересчёт снимка недешёвый."""
+    while True:
+        await dirty.wait()
+        await asyncio.sleep(0.5)
+        dirty.clear()
         await broadcast()
 
 
@@ -86,7 +97,7 @@ async def ticker() -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
-    tasks = [asyncio.create_task(ticker())]
+    tasks = [asyncio.create_task(ticker()), asyncio.create_task(notifier())]
     if settings.demo:
         log.info("ДЕМО-режим: проигрываем тестовый сценарий (DEMO=0 и настройки Telegram — для боевого режима)")
         tasks.append(asyncio.create_task(run_demo(clock, on_message)))
