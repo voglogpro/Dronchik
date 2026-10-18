@@ -2,6 +2,8 @@
   "use strict";
 
   const cfg = window.APP_CONFIG || {};
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg && tg.initData) { tg.ready(); tg.expand(); document.documentElement.classList.add("tg"); }
   const COLORS = { missile: "#e5484d", uav: "#f2762e", predicted: "#f5c24c" };
   const LABELS = { missile: "Ракетная опасность", uav: "Угроза БПЛА", predicted: "Вероятный подлёт" };
   const SEVERITY = { missile: 3, uav: 2, predicted: 1 };
@@ -23,22 +25,22 @@
     ? `https://api.maptiler.com/maps/${encodeURIComponent(cfg.maptilerStyle || "dataviz-dark")}/style.json?key=${encodeURIComponent(cfg.maptilerKey)}`
     : {
       version: 8, sources: {},
-      glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
       layers: [{ id: "bg", type: "background", paint: { "background-color": "#0e1116" } }],
     };
-  const FONT = cfg.maptilerKey ? "Noto Sans Regular" : "Open Sans Semibold";
   if (!cfg.maptilerKey) console.warn("MAPTILER_KEY не задан — показываем только границы регионов");
 
   const map = new maplibregl.Map({
     container: "map",
     style: styleUrl,
-    center: window.innerWidth < 720 ? [37.5, 51.5] : [40, 54],
+    center: window.innerWidth < 720 ? [37.5, 52.5] : [40, 54],
     zoom: window.innerWidth < 720 ? 4.2 : 4.6,
     minZoom: 2,
     maxZoom: 12,
     attributionControl: { compact: true },
   });
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+  // на телефоне нижнюю часть карты закрывает панель — центрируем по видимой области
+  if (window.innerWidth < 720) map.setPadding({ top: 70, bottom: Math.round(window.innerHeight * 0.45) + 50, left: 0, right: 0 });
 
   let regionNames = {};
   let regionGeoms = {};
@@ -47,26 +49,13 @@
 
   const empty = () => ({ type: "FeatureCollection", features: [] });
 
-  function droneIcon() {
-    const size = 48, c = document.createElement("canvas");
-    c.width = c.height = size;
-    const g = c.getContext("2d");
-    g.translate(size / 2, size / 2);
-    g.beginPath();
-    g.moveTo(0, -18); g.lineTo(13, 14); g.lineTo(0, 7); g.lineTo(-13, 14); g.closePath();
-    g.fillStyle = "#ff5a5f"; g.strokeStyle = "#fff"; g.lineWidth = 2.5;
-    g.fill(); g.stroke();
-    return g.getImageData(0, 0, size, size);
-  }
-
   function firstSymbolLayer() {
     const layer = map.getStyle().layers.find((l) => l.type === "symbol");
     return layer && layer.id;
   }
 
   map.on("load", async () => {
-    map.addImage("drone", droneIcon(), { pixelRatio: 2 });
-    const regions = await (await fetch("api/regions")).json();
+    const regions = await (await fetch(cfg.regionsUrl || "api/regions")).json();
     regions.features.forEach((f) => { regionNames[f.properties.id] = f.properties.name; regionGeoms[f.properties.id] = f.geometry; });
     fillRegionSelect();
 
@@ -90,7 +79,6 @@
     map.addSource("predicted", { type: "geojson", data: empty() });
     map.addSource("observed", { type: "geojson", data: empty() });
     map.addSource("fixes", { type: "geojson", data: empty() });
-    map.addSource("drones", { type: "geojson", data: empty() });
 
     map.addLayer({ id: "cones", type: "fill", source: "cones", paint: { "fill-color": COLORS.predicted, "fill-opacity": 0.13 } });
     map.addLayer({ id: "cones-edge", type: "line", source: "cones", paint: { "line-color": COLORS.predicted, "line-width": 1, "line-opacity": 0.35 } });
@@ -112,28 +100,14 @@
         "circle-stroke-opacity": ["case", ["==", ["get", "status"], "active"], 1, 0.4],
       },
     });
-    map.addLayer({
-      id: "drones", type: "symbol", source: "drones",
-      layout: {
-        "icon-image": "drone", "icon-size": ["interpolate", ["linear"], ["zoom"], 3, 0.7, 8, 1.1],
-        "icon-rotate": ["get", "bearing"], "icon-rotation-alignment": "map", "icon-allow-overlap": true,
-        "text-field": ["get", "label"], "text-size": 12, "text-offset": [0, 1.6], "text-anchor": "top",
-        "text-allow-overlap": false, "text-font": [FONT],
-      },
-      paint: { "text-color": "#fff", "text-halo-color": "#000", "text-halo-width": 1.4 },
-    });
 
     map.on("click", "regions-fill", (e) => regionPopup(e));
-    map.on("click", "drones", (e) => {
-      const p = e.features[0].properties;
-      new maplibregl.Popup().setLngLat(e.lngLat).setHTML(p.popup).addTo(map);
-    });
-    for (const id of ["drones", "regions-fill"]) {
+    for (const id of ["regions-fill"]) {
       map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
     }
 
-    connect();
+    if (cfg.timelineUrl) playTimeline(cfg.timelineUrl); else connect();
   });
 
   function regionPopup(e) {
@@ -160,7 +134,7 @@
       }
     }
 
-    const cones = [], predicted = [], observed = [], fixes = [], drones = [];
+    const cones = [], predicted = [], observed = [], fixes = [], seen = new Set();
     for (const tr of state.tracks) {
       const coords = tr.points.map((p) => [p.lon, p.lat]);
       if (coords.length > 1) observed.push(line(coords, { status: tr.status }));
@@ -173,17 +147,14 @@
         predicted.push(line(pr.path.map(([la, lo]) => [lo, la]), {}));
         cones.push({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [pr.cone.map(([la, lo]) => [lo, la])] } });
       }
-      drones.push(point(pos, {
-        bearing: pr ? pr.bearing : 0,
-        label: tr.count > 1 ? `×${tr.count}` : "",
-        popup: trackPopup(tr, state.now),
-      }));
+      seen.add(tr.id);
+      placeDrone(tr, pos, pr ? pr.bearing : null, state.now);
     }
     map.getSource("cones").setData(fc(cones));
     map.getSource("predicted").setData(fc(predicted));
     map.getSource("observed").setData(fc(observed));
     map.getSource("fixes").setData(fc(fixes));
-    map.getSource("drones").setData(fc(drones));
+    for (const [id, m] of droneMarkers) if (!seen.has(id)) { m.remove(); droneMarkers.delete(id); }
 
     renderPanel(state);
     checkMyRegion(state);
@@ -192,6 +163,28 @@
   const fc = (features) => ({ type: "FeatureCollection", features });
   const point = (c, props) => ({ type: "Feature", properties: props, geometry: { type: "Point", coordinates: c } });
   const line = (c, props) => ({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: c } });
+
+  // Цели рисуем DOM-маркерами: стрелка по курсу, число БПЛА рядом (без загрузки шрифтов для карты)
+  const droneMarkers = new Map();
+  function placeDrone(tr, pos, bearing, now) {
+    let m = droneMarkers.get(tr.id);
+    if (!m) {
+      const el = document.createElement("button");
+      el.className = "drone";
+      el.type = "button";
+      el.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 18-8-4.5L4 20z"/></svg><span></span>`;
+      m = new maplibregl.Marker({ element: el, rotationAlignment: "map" }).setLngLat(pos)
+        .setPopup(new maplibregl.Popup({ offset: 14, maxWidth: "280px" })).addTo(map);
+      droneMarkers.set(tr.id, m);
+    }
+    m.setLngLat(pos);
+    const el = m.getElement();
+    el.setAttribute("aria-label", `Цель #${tr.id}`);
+    el.querySelector("svg").style.transform = `rotate(${bearing ?? 0}deg)`;
+    el.classList.toggle("no-course", bearing == null);
+    el.querySelector("span").textContent = tr.count > 1 ? `×${tr.count}` : "";
+    m.getPopup().setHTML(trackPopup(tr, now));
+  }
 
   function trackPopup(tr, now) {
     const last = tr.points[tr.points.length - 1];
@@ -308,6 +301,31 @@
   }
 
   // ---------- транспорт ----------
+
+  // Статическое демо: заранее посчитанные снимки сценария, проигрываем по кругу
+  async function playTimeline(url) {
+    const frames = await (await fetch(url)).json();
+    const bar = $("demo-bar");
+    let i = 0, paused = false;
+    if (bar) {
+      bar.hidden = false;
+      $("demo-toggle").addEventListener("click", () => {
+        paused = !paused;
+        $("demo-toggle").textContent = paused ? "Продолжить" : "Пауза";
+      });
+      $("demo-restart").addEventListener("click", () => { i = 0; step(); });
+    }
+    function step() {
+      const f = frames[i];
+      render(f);
+      if (bar) {
+        const min = Math.round((f.now - frames[0].now) / 60);
+        $("demo-time").textContent = `минута ${min} из ${Math.round((frames[frames.length - 1].now - frames[0].now) / 60)}`;
+      }
+    }
+    step();
+    setInterval(() => { if (!paused) { i = (i + 1) % frames.length; step(); } }, 700);
+  }
 
   let retry = 1000, pollTimer = null;
   function connect() {

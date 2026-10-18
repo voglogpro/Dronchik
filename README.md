@@ -45,11 +45,13 @@ uvicorn app.main:app --port 8000
 
 Сообщения пишутся в SQLite (`data/dronchik.db`). После рестарта последние `HISTORY_HOURS` часов перечитываются, и карта восстанавливается.
 
-Docker:
+Docker (вместе с Caddy, который выпускает HTTPS-сертификат для домена из `DOMAIN`):
 ```bash
 docker compose run --rm dronchik python -m app.telegram_login   # один раз
 docker compose up -d
 ```
+
+Пошаговый запуск на своём домене и подключение мини-приложения Telegram описаны в [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ### Другие источники
 

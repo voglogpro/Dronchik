@@ -1,7 +1,6 @@
 services:
   dronchik:
     build: .
-    ports: ["8000:8000"]
     env_file: .env
     volumes:
       - ./channels.json:/app/channels.json:ro
@@ -10,3 +9,16 @@ services:
       DB_PATH: /app/state/dronchik.db
       TG_SESSION: /app/state/telegram
     restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8
+    ports: ["80:80", "443:443"]
+    env_file: .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [dronchik]
+    restart: unless-stopped
+
+volumes:
+  caddy_data:

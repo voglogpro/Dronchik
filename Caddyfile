@@ -1,0 +1,5 @@
+# HTTPS-сертификат Let's Encrypt Caddy получает сам; DOMAIN задаётся в .env
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy dronchik:8000
+}
