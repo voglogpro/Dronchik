@@ -47,6 +47,7 @@ class Publish:
     air_defense: bool = True   # «работа ПВО», отметки сбитий
     launches: bool = True      # пуски с территории противника и подлётное время
     feed: bool = True          # тексты сообщений каналов
+    heatmap: bool = True       # тепловая карта пролётов за период (/api/heatmap)
 
 
 class Engine:

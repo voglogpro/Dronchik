@@ -1,7 +1,8 @@
 """Собирает статическую демо-версию сайта (без сервера): снимки сценария считаются заранее.
 
 Нужна, чтобы показать, как выглядит и работает карта, на любом статическом хостинге.
-Использование: python scripts/build_static_demo.py OUT_DIR maplibre-gl.css [MAPTILER_KEY]
+Использование: python scripts/build_static_demo.py OUT_DIR maplibre-gl.css [HEATMAP_JSON] [MAPTILER_KEY]
+HEATMAP_JSON — готовая тепловая карта (ответ /api/heatmap), иначе считается по сценарию демо.
 """
 import json
 import sys
@@ -43,7 +44,7 @@ def build_timeline() -> list[dict]:
     return frames
 
 
-def main(out: str, maplibre_css: str, key: str = "") -> None:
+def main(out: str, maplibre_css: str, heatmap_json: str = "", key: str = "") -> None:
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
     static = ROOT / "static"
@@ -53,7 +54,8 @@ def main(out: str, maplibre_css: str, key: str = "") -> None:
     body = body.replace('<script src="https://telegram.org/js/telegram-web-app.js"></script>\n', "")
     cfg = {"maptilerKey": key, "maptilerStyle": "dataviz-dark", "demo": True,
            "regionsUrl": "regions.geojson", "districtsUrl": "districts.geojson", "placesUrl": "places.json",
-           "timelineUrl": "demo-timeline.json"}
+           "timelineUrl": "demo-timeline.json", "heatmapUrl": "heatmap.json", "quotesUrl": "quotes.json",
+           "channels": json.loads((ROOT / "channels.default.json").read_text(encoding="utf-8"))}
     body = body.replace('<script src="config.js"></script>', f"<script>window.APP_CONFIG = {json.dumps(cfg)};</script>")
     head = (
         '<meta charset="utf-8">\n'
@@ -66,6 +68,15 @@ def main(out: str, maplibre_css: str, key: str = "") -> None:
     css = Path(maplibre_css).read_text(encoding="utf-8")
     (out_dir / "style.css").write_text(css + "\n" + (static / "style.css").read_text(encoding="utf-8"), encoding="utf-8")
     (out_dir / "app.js").write_text((static / "app.js").read_text(encoding="utf-8"), encoding="utf-8")
+    (out_dir / "quotes.json").write_text((static / "quotes.json").read_text(encoding="utf-8"), encoding="utf-8")
+    if heatmap_json:
+        heat = Path(heatmap_json).read_text(encoding="utf-8")
+    else:
+        from app.heatmap import Heatmap
+        from app.parser import MessageParser
+        rows = [(ch, i, T0 + m * 60, text) for i, (m, ch, text) in enumerate(SCENARIO)]
+        heat = json.dumps(Heatmap(MessageParser(Gazetteer()), None, {}).build(30, rows), ensure_ascii=False)
+    (out_dir / "heatmap.json").write_text(heat, encoding="utf-8")
     (out_dir / "terms.html").write_text((static / "terms.html").read_text(encoding="utf-8"), encoding="utf-8")
     (out_dir / "config.js").write_text(f"window.APP_CONFIG = {json.dumps(cfg)};", encoding="utf-8")
     (out_dir / "regions.geojson").write_text((ROOT / "geodata" / "regions.geojson").read_text(encoding="utf-8"), encoding="utf-8")

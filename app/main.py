@@ -19,6 +19,7 @@ from .config import ROOT, load_settings
 from .demo import DemoClock, run_demo
 from .engine import Engine, Publish
 from .gazetteer import Gazetteer
+from .heatmap import Heatmap
 from .storage import MessageStore
 from .telegram_source import run_telegram
 from .web_source import run_web_channels
@@ -32,6 +33,7 @@ gazetteer = Gazetteer()
 engine = Engine(gazetteer, settings.channel_regions, Publish(**settings.publish))
 store = MessageStore(settings.db_path) if not settings.demo else None
 clock = DemoClock() if settings.demo else None
+heatmap = Heatmap(engine.parser, store, settings.channel_regions)
 clients: set[WebSocket] = set()
 
 
@@ -73,6 +75,8 @@ async def lifespan(_: FastAPI):
     else:
         for channel, msg_id, t, text in store.since(time.time() - settings.history_hours * 3600):
             engine.process(channel, text, t, msg_id)
+        # тепловую карту считаем заранее в фоне, чтобы первый запрос не ждал разбора архива
+        tasks.append(asyncio.create_task(asyncio.to_thread(heatmap.build, 7)))
         if settings.telegram_enabled:
             tasks.append(asyncio.create_task(run_telegram(settings, on_message)))
         elif settings.web_enabled:
@@ -97,6 +101,14 @@ def state() -> JSONResponse:
 @app.get("/api/regions")
 def regions() -> FileResponse:
     return FileResponse(ROOT / "geodata" / "regions.geojson", media_type="application/geo+json")
+
+
+@app.get("/api/heatmap")
+async def heatmap_api(days: int = 7) -> dict:
+    """Где чаще всего фиксировали БПЛА за период (1–30 дней) — без работы ПВО и сбитий."""
+    if not settings.publish.get("heatmap", True):
+        raise HTTPException(status_code=404, detail="тепловая карта отключена (PUBLISH_HEATMAP=0)")
+    return await asyncio.to_thread(heatmap.build, days)
 
 
 @app.get("/api/districts")

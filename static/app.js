@@ -123,6 +123,19 @@
       layout: { "line-cap": "round" },
       paint: { "line-color": COLORS.launch, "line-width": 1.6, "line-opacity": ["case", ["get", "arrived"], 0.25, ["get", "named"], 0.75, 0.45], "line-dasharray": [1, 2.5] },
     });
+    // тепловая карта пролётов за период — под всеми слоями целей
+    map.addSource("heat", { type: "geojson", data: empty() });
+    map.addLayer({
+      id: "heat", type: "heatmap", source: "heat", layout: { visibility: "none" },
+      paint: {
+        "heatmap-weight": ["interpolate", ["linear"], ["get", "count"], 1, 0.25, 20, 1],
+        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 3, 0.6, 8, 2],
+        "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 3, 10, 6, 22, 9, 40],
+        "heatmap-opacity": 0.8,
+        "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"],
+          0, "rgba(0,0,0,0)", 0.15, "#3b2a6b", 0.4, "#8e3b8f", 0.65, "#e0663a", 0.9, "#f5c24c", 1, "#fff3c4"],
+      },
+    }, "launch-routes");
     map.addSource("cones", { type: "geojson", data: empty() });
     map.addSource("predicted", { type: "geojson", data: empty() });
     map.addSource("observed", { type: "geojson", data: empty() });
@@ -573,6 +586,59 @@
     });
     $("consent-accept").focus();
   })();
+
+  // ---------- история пролётов (тепловая карта) ----------
+
+  let heatDays = 0, heatTimer = null;
+  async function loadHeat() {
+    if (!heatDays || !map.getSource("heat")) return;
+    try {
+      const url = cfg.heatmapUrl || `api/heatmap?days=${heatDays}`;
+      const h = await (await fetch(url)).json();
+      map.getSource("heat").setData(fc((h.points || []).map((p) => point([p.lon, p.lat], { count: p.count }))));
+      $("heat-summary").hidden = false;
+      $("heat-summary").textContent = h.total
+        ? `${h.total} фиксаций${h.since ? ` с ${new Date(h.since * 1000).toLocaleDateString("ru-RU")}` : ""}. Работа ПВО и сбития в карту не входят.`
+        : "За этот период фиксаций в архиве пока нет — архив копится с момента запуска сервера.";
+      $("heat-top").hidden = !h.points || !h.points.length;
+      $("heat-top").innerHTML = (h.points || []).slice(0, 8).map((p) => `<li>${esc(p.place)} <span>— ${p.count}</span></li>`).join("");
+    } catch {
+      $("heat-summary").hidden = false;
+      $("heat-summary").textContent = "Тепловая карта недоступна.";
+    }
+  }
+  document.querySelectorAll("#heat-section .seg button").forEach((btn) => btn.addEventListener("click", () => {
+    heatDays = Number(btn.dataset.days);
+    document.querySelectorAll("#heat-section .seg button").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+    map.setLayoutProperty("heat", "visibility", heatDays ? "visible" : "none");
+    $("heat-summary").hidden = $("heat-top").hidden = !heatDays;
+    clearInterval(heatTimer);
+    if (heatDays) { loadHeat(); heatTimer = setInterval(loadHeat, 10 * 60 * 1000); }
+  }));
+
+  // ---------- слова поддержки и цитаты ----------
+
+  (async function quotes() {
+    try {
+      const items = (await (await fetch(cfg.quotesUrl || "quotes.json")).json()).items || [];
+      if (!items.length) return;
+      let i = Math.floor(Math.random() * items.length);
+      const show = () => {
+        const q = items[i++ % items.length];
+        $("quote-text").textContent = q.author ? `«${q.text}»` : q.text;
+        $("quote-author").textContent = q.author ? `— ${q.author}${q.source ? `, ${q.source}` : ""}` : "";
+      };
+      $("quote").hidden = false;
+      show();
+      setInterval(show, 45000);
+    } catch { /* без цитат */ }
+  })();
+
+  if (cfg.channels && cfg.channels.length) {
+    $("consent-channels").textContent = cfg.channels.map((c) => `@${c.channel}`).join(", ");
+  } else {
+    $("consent-channels").textContent = "список — в пользовательском соглашении";
+  }
 
   $("legend-toggle").addEventListener("click", () => {
     const open = $("legend").classList.toggle("open");

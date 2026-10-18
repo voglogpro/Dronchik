@@ -15,9 +15,12 @@
   <div id="consent" class="consent" role="dialog" aria-modal="true" aria-labelledby="consent-title" hidden>
     <form id="consent-form" class="consent-card">
       <h2 id="consent-title">Прежде чем открыть карту</h2>
+      <p class="consent-mission">Цель проекта — своевременно информировать граждан об угрозах с воздуха
+        и помогать беречь Россию.</p>
       <ul>
-        <li>Дрончик автоматически собирает сообщения <b>открытых Telegram-каналов</b>. Это не официальный источник
-          и не система оповещения, сервис не связан с МЧС и органами власти.</li>
+        <li>Все данные берутся <b>только из публичных Telegram-каналов</b>:
+          <span id="consent-channels" class="consent-channels"></span>.
+          Это не официальный источник и не система оповещения, сервис не связан с МЧС и органами власти.</li>
         <li>Данные бывают <b>неполными, ошибочными и запаздывают</b>. Маршруты и время подлёта — приблизительная оценка.
           Отсутствие отметки не значит, что опасности нет.</li>
         <li>При угрозе действуйте <b>по указаниям МЧС и властей</b> вашего региона.</li>
@@ -71,6 +74,18 @@
         <ul id="track-list" class="list"></ul>
       </section>
 
+      <section id="heat-section" data-layer="heatmap">
+        <h2>История пролётов</h2>
+        <div class="seg" role="group" aria-label="Период тепловой карты">
+          <button type="button" data-days="0" aria-pressed="true">Выкл</button>
+          <button type="button" data-days="1" aria-pressed="false">24 ч</button>
+          <button type="button" data-days="7" aria-pressed="false">7 дней</button>
+          <button type="button" data-days="30" aria-pressed="false">30 дней</button>
+        </div>
+        <p id="heat-summary" class="sub note" hidden></p>
+        <ol id="heat-top" class="heat-top" hidden></ol>
+      </section>
+
       <section id="launch-section" hidden>
         <h2>Пуски и возможный подлёт</h2>
         <ul id="launch-list" class="list"></ul>
@@ -82,6 +97,11 @@
         <h2>Лента сообщений</h2>
         <ul id="feed" class="list feed"></ul>
       </section>
+
+      <figure id="quote" class="quote" hidden>
+        <blockquote id="quote-text"></blockquote>
+        <figcaption id="quote-author"></figcaption>
+      </figure>
 
       <section id="sources-section" hidden>
         <h2>Каналы-источники</h2>

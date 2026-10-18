@@ -74,7 +74,7 @@ def load_settings() -> Settings:
         ingest_token=os.environ.get("INGEST_TOKEN", ""),
         history_hours=float(os.environ.get("HISTORY_HOURS", "3")),
         poll_interval=float(os.environ.get("POLL_INTERVAL", "30")),
-        publish={key: _flag(f"PUBLISH_{key.upper()}") for key in ("tracks", "air_defense", "launches", "feed")},
+        publish={key: _flag(f"PUBLISH_{key.upper()}") for key in ("tracks", "air_defense", "launches", "feed", "heatmap")},
         terms_version=os.environ.get("TERMS_VERSION", "2026-10-18"),
         operator=os.environ.get("OPERATOR_NAME", ""),
         contact=os.environ.get("OPERATOR_CONTACT", ""),

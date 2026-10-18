@@ -32,6 +32,16 @@
         При сигналах тревоги следуйте указаниям МЧС и властей вашего региона.</p>
     </div>
 
+    <h2>Цель проекта</h2>
+    <p>Своевременно информировать граждан России об угрозах с воздуха и накапливать историю пролётов: тепловая
+      карта показывает, где чаще всего фиксировали беспилотники. Это помогает людям и службам, которые отвечают
+      за безопасность, видеть основные направления и беречь страну.</p>
+
+    <h2>Источники данных</h2>
+    <p>Все сведения берутся <b>только из публичных Telegram-каналов</b>, открытых для чтения любому пользователю.
+      Закрытые источники, служебная информация и данные органов власти не используются. Сейчас подключены:</p>
+    <ul id="channels"><li>список загружается…</li></ul>
+
     <h2>1. Что это за сервис</h2>
     <ol>
       <li>Сервис «Дрончик» (далее — Сервис) — информационный агрегатор. Он автоматически, без участия человека,
@@ -99,6 +109,19 @@
       document.getElementById("terms-version").textContent = c.termsVersion || "—";
       document.getElementById("operator").textContent = c.operator || "не указан";
       document.getElementById("contact").textContent = c.contact || "не указана";
+      const list = document.getElementById("channels");
+      list.innerHTML = "";
+      for (const ch of c.channels || []) {
+        const li = document.createElement("li");
+        const a = document.createElement("a");
+        a.href = `https://t.me/${encodeURIComponent(ch.channel)}`;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = `@${ch.channel}`;
+        li.append(a, ch.note ? ` — ${ch.note}` : "");
+        list.append(li);
+      }
+      if (!list.children.length) list.innerHTML = "<li>не указаны</li>";
     })();
   </script>
 </body>
