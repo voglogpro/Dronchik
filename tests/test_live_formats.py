@@ -183,7 +183,7 @@ def test_fetch_since_paginates_back_until_window():
     try:
         client = Client()
         # посты раз в 10 минут: за 5 часов — 30 постов, это две страницы
-        posts, newest = asyncio.run(web_source.fetch_since(client, "ch", 0, now - 5 * 3600))
+        posts, newest = asyncio.run(web_source.fetch_since(client, "ch", 0, now - 5 * 3600 - 60))
         assert newest == 100 and len(client.urls) == 2
         assert [p[0] for p in posts] == list(range(70, 101))
         client = Client()

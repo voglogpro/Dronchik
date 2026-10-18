@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from .config import ROOT, load_settings
 from .demo import DemoClock, run_demo
-from .engine import Engine
+from .engine import Engine, Publish
 from .gazetteer import Gazetteer
 from .storage import MessageStore
 from .telegram_source import run_telegram
@@ -29,7 +29,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)  # не писать в л�
 
 settings = load_settings()
 gazetteer = Gazetteer()
-engine = Engine(gazetteer, settings.channel_regions)
+engine = Engine(gazetteer, settings.channel_regions, Publish(**settings.publish))
 store = MessageStore(settings.db_path) if not settings.demo else None
 clock = DemoClock() if settings.demo else None
 clients: set[WebSocket] = set()

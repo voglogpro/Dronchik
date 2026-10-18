@@ -11,6 +11,7 @@
   --predicted: #f5c24c;
   --track: #ff5a5f;
   --accent: #4c9aff;
+  --launch: #a99cf0;
   --ok: #3dd68c;
   --radius: 12px;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -92,6 +93,14 @@ select, .btn {
 .sw-missile { background: var(--missile); } .sw-uav { background: var(--uav); } .sw-predicted { background: var(--predicted); }
 .ln { width: 18px; height: 0; display: inline-block; border-top: 3px solid var(--track); }
 .ln-pred { border-top-style: dashed; border-top-color: var(--predicted); }
+.ln-launch { border-top: 2px dotted var(--launch); }
+.launch-mark { display: flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; cursor: pointer;
+  font: 600 11px/1 system-ui, sans-serif; color: var(--launch); text-shadow: 0 0 3px #0a0d12, 0 0 3px #0a0d12; white-space: nowrap; }
+.launch-mark i { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--launch); background: rgba(169, 156, 240, .25); }
+.eta-mark { padding: 2px 7px; border-radius: 99px; cursor: pointer; font: 600 11px/1.4 system-ui, sans-serif; white-space: nowrap;
+  color: var(--text); background: rgba(20, 24, 31, .85); border: 1px dashed var(--launch); }
+.launch-mark:focus-visible, .eta-mark:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note { margin: 8px 0 0; line-height: 1.4; }
 
 .drone { position: relative; width: 30px; height: 30px; padding: 0; border: 0; background: none; cursor: pointer; }
 .drone svg { width: 30px; height: 30px; transition: transform .6s ease; filter: drop-shadow(0 0 6px rgba(255, 90, 95, .7)); }

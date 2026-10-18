@@ -4,13 +4,17 @@
   const cfg = window.APP_CONFIG || {};
   const tg = window.Telegram && window.Telegram.WebApp;
   if (tg && tg.initData) { tg.ready(); tg.expand(); document.documentElement.classList.add("tg"); }
-  const COLORS = { missile: "#e5484d", uav: "#f2762e", predicted: "#f5c24c" };
+  const COLORS = { missile: "#e5484d", uav: "#f2762e", predicted: "#f5c24c", launch: "#a99cf0" };
   const LABELS = { missile: "Ракетная опасность", uav: "Угроза БПЛА", predicted: "Вероятный подлёт" };
   const SEVERITY = { missile: 3, uav: 2, predicted: 1 };
   const BASIS = { target: "по заявленному курсу", observed: "по фиксациям", hint: "по направлению" };
 
   const $ = (id) => document.getElementById(id);
   const eta = (m) => (m <= 1 ? "< 1 мин" : `~${m} мин`);
+  const dur = (m) => (m < 60 ? `${m} мин` : `${Math.floor(m / 60)} ч${m % 60 ? ` ${String(m % 60).padStart(2, "0")} мин` : ""}`);
+  // «через ~2 ч 10 – 2 ч 40»; если окно уже прошло — первые могли долететь
+  const etaRange = ([lo, hi]) => (hi <= 0 ? "могли уже долететь" : lo <= 0 ? `в ближайшие ${dur(hi)}` : `через ~${dur(lo)} – ${dur(hi)}`);
+  const launchCount = (l) => (l.count ? (l.count[0] === l.count[1] ? `${l.count[0]} БПЛА` : `группа ${l.count[0]}–${l.count[1]}`) : l.massive ? "массовый пуск" : "число неизвестно");
   const tgLink = (ch, id) => `https://t.me/${encodeURIComponent(ch)}${id ? `/${id}` : ""}`;
   const channelLinks = (list) => (list || []).map((c) => `<a href="${tgLink(c)}" target="_blank" rel="noopener">@${esc(c)}</a>`).join(", ");
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -112,6 +116,13 @@
     }, before);
     if (!cfg.maptilerKey) addCityLabels(places);
 
+    // пуски: тонкий пунктир от района пуска к вероятной цели — ниже всех слоёв целей
+    map.addSource("launches", { type: "geojson", data: empty() });
+    map.addLayer({
+      id: "launch-routes", type: "line", source: "launches",
+      layout: { "line-cap": "round" },
+      paint: { "line-color": COLORS.launch, "line-width": 1.6, "line-opacity": ["case", ["get", "arrived"], 0.25, ["get", "named"], 0.75, 0.45], "line-dasharray": [1, 2.5] },
+    });
     map.addSource("cones", { type: "geojson", data: empty() });
     map.addSource("predicted", { type: "geojson", data: empty() });
     map.addSource("observed", { type: "geojson", data: empty() });
@@ -227,6 +238,23 @@
     map.getSource("observed").setData(fc(observed));
     map.getSource("fixes").setData(fc(fixes));
     for (const [id, m] of droneMarkers) if (!seen.has(id)) { m.remove(); droneMarkers.delete(id); }
+    const launches = state.launches || [];
+    map.getSource("launches").setData(fc(launches.flatMap((l) => l.routes.map((r) =>
+      line(r.path.map(([la, lo]) => [lo, la]), { named: r.named, arrived: !!r.arrived })))));
+    syncMarkers(launchMarkers, launches.filter((l) => l.origin_pos && !l.planned),
+      (l) => `${l.origin}/${l.first_t}`, launchMarkEl, (el, l) => {
+        el.querySelector("span").textContent = `${l.origin}${l.jet ? " · реактивные" : ""}`;
+        return `<b>Пуски БПЛА: ${esc(l.origin)}</b><br>${launchCount(l)}${l.jet ? ", реактивные" : ""}`
+          + (l.routes.length ? `<br>${l.routes.map((r) => `${r.named ? "" : "вероятно "}${esc(r.target)}: ${etaRange(r.eta_min)}`).join("<br>")}` : "")
+          + `<br><span class="sub">Маршрут и время ориентировочные: по крейсерской скорости, без учёта манёвров.</span>`
+          + `<br><span class="sub">Источник: ${channelLinks(l.channels)}</span>`;
+      }, (l) => [l.origin_pos[1], l.origin_pos[0]]);
+    syncMarkers(etaMarkers, launches.flatMap((l) => l.routes.filter((r) => !r.arrived)
+      .map((r) => ({ ...r, key: `${l.origin}/${l.first_t}/${r.region}/${r.target}` }))),
+      (r) => r.key, etaMarkEl, (el, r) => {
+        el.textContent = r.eta_min[1] <= 0 ? "подлёт возможен" : `≈ ${dur(Math.max(r.eta_min[0], 0))}`;
+        return `<b>${esc(r.target)}</b><br>Возможный подлёт ${etaRange(r.eta_min)}<br><span class="sub">${r.named ? "Направление указал канал" : "Типичное направление для этого района пуска"}</span>`;
+      }, (r) => [r.path[r.path.length - 1][1], r.path[r.path.length - 1][0]]);
     syncMarkers(alertMarkers, state.alert_marks || [], (a) => a.district || a.region, alertMarkEl, (el, a) => {
       // className не перезаписываем: MapLibre держит на элементе свой класс позиционирования
       el.classList.toggle("missile", a.level === "missile");
@@ -269,14 +297,29 @@
     el.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1l2.4 6.3L21 5l-3.3 5.6L23 13l-6 1.6 1.6 6.4-5.1-3.9L9.7 23l-.9-6.6L2 17.5l4.2-5.2L1 8.6l6.6-.6z"/></svg>`;
     return el;
   };
-  function syncMarkers(store, items, keyOf, makeEl, update) {
+  const launchMarkers = new Map();
+  const etaMarkers = new Map();
+  const launchMarkEl = () => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "launch-mark";
+    el.innerHTML = `<i aria-hidden="true"></i><span></span>`;
+    return el;
+  };
+  const etaMarkEl = () => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "eta-mark";
+    return el;
+  };
+  function syncMarkers(store, items, keyOf, makeEl, update, posOf = (x) => [x.lon, x.lat]) {
     const keep = new Set();
     for (const item of items) {
       const key = keyOf(item);
       keep.add(key);
       let m = store.get(key);
       if (!m) {
-        m = new maplibregl.Marker({ element: makeEl() }).setLngLat([item.lon, item.lat])
+        m = new maplibregl.Marker({ element: makeEl() }).setLngLat(posOf(item))
           .setPopup(new maplibregl.Popup({ offset: 14, maxWidth: "280px" })).addTo(map);
         store.set(key, m);
       }
@@ -326,6 +369,9 @@
   }
 
   function renderPanel(state) {
+    // слои, выключенные на сервере (PUBLISH_*), убираем и из легенды
+    const pub = state.publish || {};
+    document.querySelectorAll("[data-layer]").forEach((el) => { el.hidden = pub[el.dataset.layer] === false; });
     const regions = Object.entries(state.regions).sort((a, b) =>
       (SEVERITY[b[1].status] - SEVERITY[a[1].status]) || ((a[1].eta_min ?? 0) - (b[1].eta_min ?? 0)));
     const active = state.tracks.filter((t) => t.status === "active");
@@ -357,6 +403,18 @@
         <div class="row"><span>#${tr.id} · ${esc(last.place)}${tr.count > 1 ? ` · ×${tr.count}` : ""}</span><span class="sub">${ago(last.t, state.now)}</span></div>
         <div class="sub">${next}</div></li>`;
     }).join("") : `<li class="empty">Целей не зафиксировано</li>`;
+
+    const launchList = (state.launches || []);
+    $("launch-section").hidden = !launchList.length;
+    $("launch-list").innerHTML = launchList.map((l) => {
+      const head = l.planned ? `Подготовка к пуску${l.origin ? `: ${esc(l.origin)}` : ""}` : `Пуски${l.origin ? `: ${esc(l.origin)}` : ""}`;
+      const where = l.routes.length
+        ? l.routes.map((r) => `${r.named ? "" : "вероятно "}${esc(r.target)} — ${r.arrived ? "уже есть фиксации" : etaRange(r.eta_min)}`).join("<br>")
+        : l.targets.length ? `в направлении: ${l.targets.map(esc).join(", ")}` : "направление не указано";
+      return `<li><div class="row"><span>${head}</span><span class="sub">${hhmm(l.last_t)}</span></div>
+        <div class="sub">${l.planned ? "" : `${launchCount(l)}${l.jet ? ", реактивные" : ""}<br>`}${where}</div>
+        <div class="sub src">${channelLinks(l.channels)}</div></li>`;
+    }).join("");
 
     $("feed").innerHTML = state.feed.length ? state.feed.slice(0, 25).map((m) => `
       <li><div class="row"><a class="sub src" href="${tgLink(m.channel, m.msg_id)}" target="_blank" rel="noopener">@${esc(m.channel)}</a><span class="sub">${hhmm(m.t)}</span></div>

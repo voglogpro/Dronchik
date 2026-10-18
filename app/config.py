@@ -33,6 +33,7 @@ class Settings:
     ingest_token: str = ""
     history_hours: float = 3.0
     poll_interval: float = 30.0   # как часто перечитывать каналы через t.me/s, секунды
+    publish: dict = field(default_factory=dict)  # PUBLISH_* — что показывать на сайте
 
     @property
     def telegram_enabled(self) -> bool:
@@ -46,6 +47,11 @@ class Settings:
     @property
     def channel_regions(self) -> dict[str, str]:
         return {c["channel"].lstrip("@").lower(): c["region"] for c in self.channels if c.get("region")}
+
+
+def _flag(name: str, default: bool = True) -> bool:
+    value = os.environ.get(name)
+    return default if value is None else value.strip().lower() not in ("0", "false", "no", "off", "")
 
 
 def load_settings() -> Settings:
@@ -65,6 +71,7 @@ def load_settings() -> Settings:
         ingest_token=os.environ.get("INGEST_TOKEN", ""),
         history_hours=float(os.environ.get("HISTORY_HOURS", "3")),
         poll_interval=float(os.environ.get("POLL_INTERVAL", "30")),
+        publish={key: _flag(f"PUBLISH_{key.upper()}") for key in ("tracks", "air_defense", "launches", "feed")},
     )
     demo = os.environ.get("DEMO", "auto").lower()
     s.demo = demo in ("1", "true", "yes") or (demo == "auto" and not s.channels)

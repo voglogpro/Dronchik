@@ -4,7 +4,8 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 
-from .gazetteer import Gazetteer
+from .gazetteer import Gazetteer, normalize
+from .launches import RX_LAUNCH, LaunchBoard, LaunchDetector
 from .parser import CLEAR, DESTROYED, ENGAGED, HEADING, MISSILE_ALERT, SIGHTING, UAV_ALERT, MessageParser
 from .tracker import TRACK_TTL_S, Tracker
 
@@ -38,9 +39,23 @@ class RegionAlert:
                 del self.levels[level]
 
 
+@dataclass
+class Publish:
+    """Что отдавать на сайт. Часть сведений в регионах РФ запрещено распространять —
+    владелец сервиса выключает лишнее переменными окружения (см. README, «Правовые риски»)."""
+    tracks: bool = True        # дроны, пройденный путь, прогноз маршрута
+    air_defense: bool = True   # «работа ПВО», отметки сбитий
+    launches: bool = True      # пуски с территории противника и подлётное время
+    feed: bool = True          # тексты сообщений каналов
+
+
 class Engine:
-    def __init__(self, gazetteer: Gazetteer, channel_regions: dict[str, str] | None = None):
+    def __init__(self, gazetteer: Gazetteer, channel_regions: dict[str, str] | None = None,
+                 publish: Publish | None = None):
         self.gaz = gazetteer
+        self.publish = publish or Publish()
+        self.launch_detector = LaunchDetector(gazetteer)
+        self.launches = LaunchBoard()
         self.parser = MessageParser(gazetteer)
         self.tracker = Tracker(gazetteer)
         self.channel_regions = channel_regions or {}
@@ -51,8 +66,15 @@ class Engine:
         self.version = 0
 
     def process(self, channel: str, text: str, t: float, msg_id: int | None = None) -> list:
-        events = self.parser.parse(text, default_region=self.channel_regions.get(channel))
-        if not events:
+        launch = self.launch_detector.parse(text, t, channel)
+        if launch:
+            self.launches.add(launch)
+            # строки про пуск не окрашивают регионы «в направлении» — остальное разбираем как обычно
+            text_rest = "\n".join(line for line in text.splitlines() if not RX_LAUNCH.search(normalize(line)))
+            events = self.parser.parse(text_rest, default_region=self.channel_regions.get(channel))
+        else:
+            events = self.parser.parse(text, default_region=self.channel_regions.get(channel))
+        if not events and not launch:
             return events
         for ev in events:
             if ev.kind == CLEAR:
@@ -93,7 +115,7 @@ class Engine:
                     self._raise(self.district_alerts, did, "uav", t, channel)
         self.feed.appendleft({
             "t": t, "channel": channel, "msg_id": msg_id, "text": text[:400],
-            "kinds": sorted({e.kind for e in events}),
+            "kinds": sorted({e.kind for e in events} | ({"launch"} if launch else set())),
             "regions": sorted({r for e in events for r in e.region_ids}),
         })
         self.version += 1
@@ -194,9 +216,23 @@ class Engine:
             info["name"] = self.gaz.districts[did].name
             info["region"] = self.gaz.districts[did].region_id
         shootdowns = [s for s in self.shootdowns if 0 <= now - s["t"] <= SHOOTDOWN_SHOW_S]
+        launches = self.launches.snapshot(now)
+        # в регионе-цели уже есть фиксации после пуска — отсчёт подлёта больше не нужен
+        for lc in launches:
+            for route in lc["routes"]:
+                route["arrived"] = any(p.region_id == route["region"] and p.t >= lc["first_t"]
+                                       for tr in self.tracker.tracks for p in tr.points)
+        pub = self.publish
+        if not pub.air_defense:
+            shootdowns = []
+            for item in tracks:
+                item["engaged"] = False
+        if not pub.tracks:
+            tracks = []
         return {"now": now, "version": self.version, "regions": regions, "districts": districts,
                 "tracks": tracks, "shootdowns": shootdowns, "alert_marks": self._alert_marks(now),
-                "feed": list(self.feed)}
+                "launches": launches if pub.launches else [],
+                "feed": list(self.feed) if pub.feed else [], "publish": pub.__dict__}
 
     def _alert_marks(self, now: float) -> list[dict]:
         """Значки «!» там, где канал объявил опасность, но конкретной цели нет.

@@ -50,6 +50,13 @@
         <ul id="track-list" class="list"></ul>
       </section>
 
+      <section id="launch-section" hidden>
+        <h2>Пуски и возможный подлёт</h2>
+        <ul id="launch-list" class="list"></ul>
+        <p class="sub note">Время — ориентир для подготовки, а не точный прогноз: по крейсерской скорости 150–185 км/ч
+          (реактивные — 350–450 км/ч), без учёта манёвров. Регионы по пускам не окрашиваются.</p>
+      </section>
+
       <section>
         <h2>Лента сообщений</h2>
         <ul id="feed" class="list feed"></ul>
@@ -72,14 +79,15 @@
     <button type="button" class="legend-toggle" id="legend-toggle" aria-expanded="false">Легенда</button>
     <span><i class="sw sw-missile"></i>Ракетная опасность</span>
     <span><i class="sw sw-uav"></i>Угроза БПЛА</span>
-    <span><i class="sw sw-predicted"></i>Вероятный подлёт ≤ 60 мин</span>
+    <span data-layer="tracks"><i class="sw sw-predicted"></i>Вероятный подлёт ≤ 60 мин</span>
     <span><i class="sw sw-district"></i>Район с фиксацией</span>
     <span><i class="lg-alert">!</i>Опасность, цель не зафиксирована</span>
-    <span><i class="lg-drone"></i>Фиксация БПЛА</span>
-    <span><i class="lg-scope"></i>Работа ПВО</span>
-    <span><i class="lg-shoot"></i>Сбитие</span>
-    <span><i class="ln ln-obs"></i>Пройденный путь</span>
-    <span><i class="ln ln-pred"></i>Прогноз</span>
+    <span data-layer="tracks"><i class="lg-drone"></i>Фиксация БПЛА</span>
+    <span data-layer="air_defense"><i class="lg-scope"></i>Работа ПВО</span>
+    <span data-layer="air_defense"><i class="lg-shoot"></i>Сбитие</span>
+    <span data-layer="launches"><i class="ln ln-launch"></i>Пуск и примерный маршрут</span>
+    <span data-layer="tracks"><i class="ln ln-obs"></i>Пройденный путь</span>
+    <span data-layer="tracks"><i class="ln ln-pred"></i>Прогноз</span>
   </div>
 
   <div id="demo-bar" class="demo-bar" hidden>
