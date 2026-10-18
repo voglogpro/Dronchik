@@ -12,7 +12,7 @@ from .gazetteer import LETTER, Gazetteer, normalize, word_stem
 RX_EXPECTED = re.compile(r"ожида\w*\s+(?:ориентировочно\s+)?((?:до|около|более|свыше|порядка)?\s*\d[\d\s]*\d?)\s*(?:единиц\w*\s+)?(?:вражеск\w*\s+)?(бпла|беспилот\w*|дрон\w*)", re.I)
 RX_TITLE = re.compile(r"прогноз\w*\s+обстановк\w*[^\n]*", re.I)
 # подписи и реклама канала в конце поста
-RX_JUNK = re.compile(r"^(?:тг|мах|max|tg|подписат|наш канал|дальше будет больше|основные векторы)", re.I)
+RX_JUNK = re.compile(r"^(?:тг|мах|max|tg|подписат|наш канал|дальше будет больше|основные векторы|радар по всей)|https?://|t\.me/|max\.ru|@\w{3,}", re.I)
 ARROW = re.compile(r"\s*(?:→|->|⇒|➡️?|—>)\s*")
 
 

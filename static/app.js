@@ -505,13 +505,20 @@
 
   // Подробная карта по коду доступа; без кода — только тревоги по областям и районам
   function renderAccess(state) {
-    const full = state.mode !== "public";
-    $("access-section").hidden = !(cfg.accessCodes || state.mode === "full");
+    const full = state.mode === "full";
+    const section = $("access-section");
+    section.hidden = !(cfg.accessCodes || full);
+    section.classList.toggle("unlocked", full);
+    $("access-state").textContent = full ? "включена" : "для своих · по коду доступа";
     $("access-text").textContent = full
-      ? "Включена подробная карта: значки дронов, маршруты, работа ПВО, пуски и ночной прогноз. Это расчётная анимация по сообщениям каналов, а не реальное положение. Не пересылайте её."
-      : "Открыта публичная карта: только области и районы, где каналы объявили опасность — как в официальных оповещениях. Значки дронов, маршруты и ночной прогноз доступны по коду.";
+      ? "Вы видите подробную карту. Это расчётная схема по сообщениям каналов, а не реальное положение объектов. Не пересылайте её."
+      : "Сейчас открыта публичная карта: только области и районы, где каналы объявили опасность. С кодом доступа добавляется:";
     $("access-form").hidden = full;
-    $("access-logout").hidden = !full || state.mode !== "full";
+    $("access-hint").hidden = full;
+    $("access-logout").hidden = !full;
+    $("access-hint").textContent = cfg.contact ? `Кода нет? Напишите владельцу: ${cfg.contact}` : "Кода нет? Его выдаёт владелец сайта.";
+    const perks = $("consent-perks");
+    if (perks) perks.hidden = !cfg.accessCodes && !full;
   }
   $("access-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -560,6 +567,17 @@
     }
   }
 
+  // Что за сообщение: по самому важному из распознанных событий
+  const FEED_LEVELS = [
+    ["missile_alert", "missile", "Ракетная опасность"], ["uav_alert", "uav", "Тревога по БПЛА"], ["uav_warn", "warn", "Внимание"],
+    ["clear", "clear", "Отбой"], ["destroyed", "shoot", "Сбитие"], ["engaged", "shoot", "Работа ПВО"],
+    ["sighting", "sight", "Фиксация БПЛА"], ["heading", "sight", "Курс БПЛА"], ["launch", "launch", "Пуск"],
+  ];
+  const feedLevel = (kinds) => {
+    const hit = FEED_LEVELS.find(([k]) => kinds.includes(k));
+    return hit ? { key: hit[1], label: hit[2] } : { key: "info", label: "Сообщение" };
+  };
+
   function renderPanel(state) {
     // слои, выключенные на сервере (PUBLISH_*), убираем и из легенды
     const pub = state.publish || {};
@@ -578,18 +596,6 @@
         : `<div class="stat"><b>${active.reduce((s, t) => s + t.count, 0)}</b><span>целей в воздухе</span></div>
       <div class="stat"><b>${counts.pred}</b><span>на пути подлёта</span></div>`);
     renderAccess(state);
-
-    const byRegion = {};
-    for (const [id, d] of Object.entries(state.districts || {})) (byRegion[d.region] ||= []).push(d);
-    $("alert-list").innerHTML = regions.length ? regions.map(([id, r]) => {
-      const ds = (byRegion[id] || []).filter((d) => d.status !== "predicted").map((d) => esc(d.name));
-      return `<li data-region="${esc(id)}">
-        <div class="row"><span>${esc(r.name)}</span><span class="badge ${r.status}">${r.status === "predicted" ? eta(r.eta_min) : LABELS[r.status]}</span></div>
-        <div class="sub">${r.status === "predicted" ? "по прогнозу маршрута" : `с ${hhmm(r.since)} · обновлено ${ago(r.updated, state.now)}`}</div>
-        ${r.channels && r.channels.length ? `<div class="sub src">${channelLinks(r.channels)}</div>` : ""}
-        ${ds.length ? `<div class="sub districts">Районы: ${ds.join(", ")}</div>` : ""}
-      </li>`;
-    }).join("") : `<li class="empty">Активных тревог нет</li>`;
 
     $("track-list").innerHTML = active.length ? active.map((tr) => {
       const last = tr.points[tr.points.length - 1];
@@ -613,9 +619,18 @@
         <div class="sub src">${channelLinks(l.channels)}</div></li>`;
     }).join("");
 
-    $("feed").innerHTML = state.feed.length ? state.feed.slice(0, 25).map((m) => `
-      <li><div class="row"><a class="sub src" href="${tgLink(m.channel, m.msg_id)}" target="_blank" rel="noopener">@${esc(m.channel)}</a><span class="sub">${hhmm(m.t)}</span></div>
-      <div class="text">${esc(m.text)}</div></li>`).join("") : `<li class="empty">Сообщений пока нет</li>`;
+    const full = state.mode !== "public";
+    $("feed-sub").textContent = full
+      ? "Все сообщения, которые прочитал наш бот. Нажмите на сообщение — карта покажет область."
+      : "Тревоги, которые наш бот прочитал в открытых каналах. Нажмите на сообщение — карта покажет область.";
+    $("feed").innerHTML = state.feed.length ? state.feed.slice(0, full ? 30 : 40).map((m) => {
+      const lv = feedLevel(m.kinds || []);
+      const region = (m.regions || []).find((r) => regionGeoms[r]);
+      return `<li class="lv-${lv.key}"${region ? ` data-region="${esc(region)}"` : ""}>
+        <div class="row"><span class="feed-badge ${lv.key}">${lv.label}</span><span class="sub">${hhmm(m.t)}</span></div>
+        <div class="text">${esc(m.text)}</div>
+        <div class="sub"><a class="src" href="${tgLink(m.channel, m.msg_id)}" target="_blank" rel="noopener">@${esc(m.channel)}</a>${(m.regions || []).length ? ` · ${(m.regions || []).slice(0, 3).map((r) => esc(regionNames[r] || r)).join(", ")}` : ""}</div></li>`;
+    }).join("") : `<li class="empty">Сообщений пока нет</li>`;
 
     renderHealth(state);
     const alertCount = regions.filter(([, r]) => r.status !== "predicted").length;
@@ -637,7 +652,8 @@
     }
   }
 
-  $("alert-list").addEventListener("click", (e) => {
+  $("feed").addEventListener("click", (e) => {
+    if (e.target.closest("a")) return;
     const li = e.target.closest("[data-region]");
     if (li) flyToRegion(li.dataset.region);
   });

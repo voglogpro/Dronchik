@@ -56,6 +56,9 @@ class Publish:
     heatmap: bool = True       # тепловая карта пролётов за период (/api/heatmap)
 
 
+PUBLIC_FEED_KINDS = {UAV_ALERT, MISSILE_ALERT, UAV_WARN, CLEAR}
+
+
 class Engine:
     def __init__(self, gazetteer: Gazetteer, channel_regions: dict[str, str] | None = None,
                  publish: Publish | None = None):
@@ -69,7 +72,7 @@ class Engine:
         self.channel_regions = channel_regions or {}
         self.alerts: dict[str, RegionAlert] = {}
         self.district_alerts: dict[str, RegionAlert] = {}
-        self.feed: deque[dict] = deque(maxlen=60)
+        self.feed: deque[dict] = deque(maxlen=150)
         self.shootdowns: deque[dict] = deque(maxlen=200)
         self.forecast: dict | None = None   # последний «прогноз обстановки» канала: текст и векторы направлений
         self.health: dict = {}              # состояние источника (заполняет web_source)
@@ -282,6 +285,9 @@ class Engine:
         snap["tracks"], snap["shootdowns"], snap["launches"] = [], [], []
         snap["alert_marks"] = self._alert_marks(now, everywhere=True)
         snap["forecast"] = None  # ночной прогноз «чего ждать» — часть подробной версии
+        # лента тревог: только объявления опасности, «внимание» и отбои; сообщения о фиксациях,
+        # ПВО, сбитиях и пусках остаются в подробной версии
+        snap["feed"] = [m for m in snap["feed"] if m["kinds"] and set(m["kinds"]) <= PUBLIC_FEED_KINDS][:40]
         snap["publish"] = {**snap["publish"], "tracks": False, "air_defense": False, "launches": False, "heatmap": False}
         snap["mode"] = "public"
         return snap

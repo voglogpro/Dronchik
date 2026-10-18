@@ -28,7 +28,7 @@
     box.hidden = false;
     document.body.classList.add("consent-open");
     background.forEach(el => { el.inert = true; });
-    title.focus();
+    title.focus({ preventScroll: true });
   }
 
   accept.addEventListener("change", () => { submit.disabled = !accept.checked; });
@@ -40,7 +40,7 @@
     background.forEach(el => { el.inert = false; });
     // Сохранение согласия не отменяет уведомление при следующем входе.
     try { localStorage.setItem("termsAccepted", version); } catch { /* приватный режим */ }
-    (previousFocus && previousFocus !== document.body ? previousFocus : reopen).focus();
+    (previousFocus && previousFocus !== document.body ? previousFocus : reopen).focus({ preventScroll: true });
   });
   box.addEventListener("keydown", event => {
     if (event.key !== "Tab") return;

@@ -103,3 +103,22 @@ def test_forecast_only_in_full_version(gaz):
     assert sm["directions"] == ["Брянская область → Калужская/Смоленская область"]
     assert sm["notes"] == ["Противник готовит удары по энергетике."]
     assert e.public_snapshot(T0 + 60)["forecast"] is None
+
+
+def test_public_feed_has_only_alerts(gaz):
+    e = Engine(gaz)
+    e.process("a", "Курская область\nОпасность по БПЛА", T0, 1)
+    e.process("a", "🛵 2 БПЛА над Курчатовым курсом на Курск", T0 + 10, 2)
+    e.process("a", "Работа ПВО в районе Курска", T0 + 20, 3)
+    e.process("a", annotate("Пензенская область", "yellow"), T0 + 30, 4)
+    e.process("a", "Курская область\nОтбой опасности по БПЛА", T0 + 40, 5)
+    full, public = e.snapshot(T0 + 60), e.public_snapshot(T0 + 60)
+    assert [m["msg_id"] for m in full["feed"]] == [5, 4, 3, 2, 1]
+    assert [m["msg_id"] for m in public["feed"]] == [5, 4, 1]
+
+
+def test_forecast_summary_drops_channel_ads(gaz):
+    from app.forecast import ForecastParser
+    sm = ForecastParser(gaz).summary("ПРОГНОЗ ОБСТАНОВКИ на ночь\nОсобое внимание к тревогам.\n"
+                                     "Радар по всей России - @radarrussiia\nhttps://max.ru/join/radarrussiia")
+    assert sm["notes"] == ["Особое внимание к тревогам."]

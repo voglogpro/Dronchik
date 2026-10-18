@@ -15,46 +15,67 @@
 
   <div id="consent" class="consent" role="dialog" aria-modal="true" aria-labelledby="consent-title" aria-describedby="consent-purpose">
     <form id="consent-form" class="consent-card">
-      <header class="consent-head">
-        <span class="logo" aria-hidden="true"></span>
-        <div>
-          <p class="consent-kicker">Дрончик · для жителей</p>
-          <h2 id="consent-title" tabindex="-1">Наша цель — безопасность людей</h2>
-        </div>
-      </header>
+      <div class="consent-flag" aria-hidden="true"><i></i><i></i><i></i></div>
 
-      <p id="consent-purpose" class="consent-mission">Проект помогает жителям России узнавать о сообщениях об опасности и беречь себя и близких.</p>
-
-      <ul class="consent-points">
-        <li>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/></svg>
-          <div><b>Карта основана только на публичных Telegram-каналах.</b> Мы не связаны с МЧС, Минобороны и органами власти.
-            <details class="consent-sources"><summary>Какие каналы читаем</summary><div id="consent-channels" class="chips"></div></details>
+      <div class="consent-scroll">
+        <header class="consent-head">
+          <span class="logo" aria-hidden="true"></span>
+          <div>
+            <p class="consent-kicker">Дрончик · для жителей России</p>
+            <h2 id="consent-title" tabindex="-1">Карта тревог по БПЛА — чтобы беречь себя и близких</h2>
           </div>
-        </li>
-        <li>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c3-8 7-12 14-14"/><path d="M15 5h4v4"/></svg>
-          <div><b>Всё, что нарисовано на карте, — схема и анимация.</b> Заливка областей и значки строятся автоматически по текстам сообщений каналов. Это не радар и не настоящее положение объектов; карта ничем не управляет и ни на что не влияет.</div>
-        </li>
-        <li>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/></svg>
-          <div><b>Информация может быть ошибочной или устаревшей.</b> Не полагайтесь на карту. Нет отметки — не значит, что нет опасности. Действуйте по сигналам МЧС и властей своего региона.</div>
-        </li>
-        <li>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/></svg>
-          <div><b>Тревожиться не стоит.</b> Большинство отметок — сообщения о возможной угрозе, а не о реальной опасности рядом с вами. Не пересылайте данные с карты, если в вашем регионе это запрещено.</div>
-        </li>
-      </ul>
-      <noscript><p class="consent-explanation">Для открытия карты нужен JavaScript. При угрозе ориентируйтесь на официальные оповещения.</p></noscript>
+        </header>
 
-      <label class="consent-check" id="consent-check">
-        <input type="checkbox" id="consent-accept" required>
-        <span class="box" aria-hidden="true"></span>
-        <span>Мне есть 18 лет, я прочитал(а) и принимаю
-          <a href="terms.html" target="_blank" rel="noopener">пользовательское соглашение</a></span>
-      </label>
-      <p class="consent-note" id="consent-note" hidden>Вы уже приняли <a href="terms.html" target="_blank" rel="noopener">пользовательское соглашение</a>. Это напоминание показывается при каждом входе.</p>
-      <button type="submit" id="consent-submit" class="btn primary" disabled>Принять и открыть карту</button>
+        <p id="consent-purpose" class="consent-mission">Мы собираем сообщения открытых Telegram-каналов об опасности с воздуха и показываем на карте, где объявлена тревога, — просто и без паники.</p>
+
+        <h3 class="consent-h">Как читать карту</h3>
+        <ul class="consent-legend">
+          <li><i class="sw sw-uav"></i><span><b>Оранжевая заливка</b> — объявлена тревога по БПЛА</span></li>
+          <li><i class="sw sw-missile"></i><span><b>Красная</b> — ракетная опасность</span></li>
+          <li><i class="sw sw-warn"></i><span><b>Светло-жёлтая</b> — «внимание»: угроза возможна, тревоги ещё нет</span></li>
+          <li><i class="lg-alert">!</i><span><b>Значок «!»</b> — канал объявил опасность в этом районе</span></li>
+          <li><i class="sw sw-clear"></i><span><b>Нет заливки</b> — тревоги нет или дан отбой (в каналах он зелёный)</span></li>
+        </ul>
+
+        <h3 class="consent-h">Что важно знать</h3>
+        <ul class="consent-points">
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/></svg>
+            <div><b>Карта основана только на публичных Telegram-каналах.</b> Мы читаем их автоматически примерно раз в полминуты: сообщения могут приходить с задержкой в несколько минут. Мы не связаны с МЧС, Минобороны и органами власти.
+              <details class="consent-sources"><summary>Какие каналы читаем</summary><div id="consent-channels" class="chips"></div></details>
+            </div>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c3-8 7-12 14-14"/><path d="M15 5h4v4"/></svg>
+            <div><b>Всё, что нарисовано на карте, — схема и анимация.</b> Заливка и значки строятся автоматически по текстам сообщений. Это не радар и не настоящее положение объектов; карта ничем не управляет и ни на что не влияет.</div>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/></svg>
+            <div><b>Информация может быть ошибочной или устаревшей.</b> Не полагайтесь на карту. Нет отметки — не значит, что нет опасности. Действуйте по сигналам МЧС и властей своего региона.</div>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/></svg>
+            <div><b>Тревожиться не стоит.</b> Большинство отметок — сообщения о возможной угрозе, а не о реальной опасности рядом с вами. Не пересылайте данные с карты, если в вашем регионе это запрещено.</div>
+          </li>
+        </ul>
+
+        <div class="consent-perks" id="consent-perks">
+          <b>Есть подробная карта — по коду доступа</b>
+          <span>Движение целей, маршруты и время подлёта, работа ПВО, ночной прогноз и история пролётов. Код выдаёт владелец сайта; вводится в панели справа, в самом верху.</span>
+        </div>
+        <noscript><p class="consent-explanation">Для открытия карты нужен JavaScript. При угрозе ориентируйтесь на официальные оповещения.</p></noscript>
+      </div>
+
+      <div class="consent-foot">
+        <label class="consent-check" id="consent-check">
+          <input type="checkbox" id="consent-accept" required>
+          <span class="box" aria-hidden="true"></span>
+          <span>Мне есть 18 лет, я прочитал(а) и принимаю
+            <a href="terms.html" target="_blank" rel="noopener">пользовательское соглашение</a></span>
+        </label>
+        <p class="consent-note" id="consent-note" hidden>Вы уже приняли <a href="terms.html" target="_blank" rel="noopener">пользовательское соглашение</a>. Это напоминание показывается при каждом входе.</p>
+        <button type="submit" id="consent-submit" class="btn primary" disabled>Принять и открыть карту</button>
+      </div>
     </form>
   </div>
 
@@ -67,7 +88,7 @@
   <aside id="panel" aria-label="Обстановка">
     <header class="panel-head" id="panel-head">
       <div class="brand">
-        <span class="logo" aria-hidden="true"></span>
+        <span class="flag" aria-hidden="true"><i></i><i></i><i></i></span>
         <div>
           <h1>Дрончик</h1>
           <p id="status-line" class="muted">Подключение…</p>
@@ -78,11 +99,40 @@
     </header>
 
     <div class="panel-body">
+      <section id="access-section" class="access-card" hidden aria-labelledby="access-title">
+        <div class="access-top">
+          <span class="access-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>
+          </span>
+          <div>
+            <h2 id="access-title">Подробная карта</h2>
+            <p id="access-state" class="sub">для своих · по коду доступа</p>
+          </div>
+        </div>
+        <p id="access-text" class="access-text"></p>
+        <ul class="access-perks">
+          <li>Значки целей, плавно движущиеся по расчётной скорости</li>
+          <li>Маршруты и время подлёта до районов</li>
+          <li>Работа ПВО и отметки сбитий</li>
+          <li>Пуски и примерное время подлёта</li>
+          <li>Ночной прогноз: сколько ждать и откуда</li>
+          <li>История пролётов — тепловая карта</li>
+        </ul>
+        <form id="access-form" class="access-form">
+          <input id="access-code" type="password" autocomplete="off" placeholder="Код доступа" aria-label="Код доступа">
+          <button type="submit" class="btn gold">Войти</button>
+        </form>
+        <p id="access-error" class="access-error" role="alert" hidden></p>
+        <p id="access-hint" class="sub">Кода нет? Его выдаёт владелец сайта.</p>
+        <button type="button" id="access-logout" class="btn" hidden>Вернуться к публичной карте</button>
+      </section>
+
       <section class="purpose-notice" aria-label="Цель проекта">
         <strong>Для безопасности жителей России</strong>
-        <p>Сообщения открытых каналов могут ошибаться. Действуйте по официальным сигналам МЧС и властей.</p>
+        <p>Сообщения открытых каналов могут ошибаться. Всё нарисованное — схема, не радар. Действуйте по официальным сигналам МЧС и властей.</p>
         <button type="button" id="purpose-open" class="btn">О цели проекта и ограничениях</button>
       </section>
+
       <section class="summary" id="summary"></section>
 
       <section>
@@ -98,17 +148,6 @@
         <button id="notify-btn" class="btn" hidden>Включить уведомления</button>
       </section>
 
-      <section id="access-section" class="access" hidden>
-        <h2>Подробная карта</h2>
-        <p id="access-text" class="sub"></p>
-        <form id="access-form" class="access-form">
-          <input id="access-code" type="password" autocomplete="off" placeholder="Код доступа" aria-label="Код доступа">
-          <button type="submit" class="btn">Войти</button>
-        </form>
-        <p id="access-error" class="access-error" role="alert" hidden></p>
-        <button type="button" id="access-logout" class="btn" hidden>Вернуться к публичной карте</button>
-      </section>
-
       <section id="forecast" class="forecast" hidden aria-labelledby="forecast-title">
         <div class="forecast-head">
           <h2 id="forecast-title">Прогноз на ночь</h2>
@@ -121,8 +160,9 @@
       </section>
 
       <section>
-        <h2>Регионы под угрозой</h2>
-        <ul id="alert-list" class="list"></ul>
+        <h2>Лента тревог</h2>
+        <p class="sub feed-sub" id="feed-sub">Что наш бот прочитал в открытых каналах. Нажмите на сообщение — карта покажет область.</p>
+        <ul id="feed" class="list feed"></ul>
       </section>
 
       <section data-layer="tracks">
@@ -147,11 +187,6 @@
         <ul id="launch-list" class="list"></ul>
         <p class="sub note">Время — ориентир для подготовки, а не точный прогноз: по крейсерской скорости 150–185 км/ч
           (реактивные — 350–450 км/ч), без учёта манёвров. Регионы по пускам не окрашиваются.</p>
-      </section>
-
-      <section>
-        <h2>Лента сообщений</h2>
-        <ul id="feed" class="list feed"></ul>
       </section>
 
       <figure id="quote" class="quote" hidden>
