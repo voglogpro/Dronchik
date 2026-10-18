@@ -7,14 +7,14 @@
 3. На сервере:
    ```bash
    git clone <репозиторий> dronchik && cd dronchik
-   cp .env.example .env              # DOMAIN, MAPTILER_KEY, TG_API_ID, TG_API_HASH, DEMO=0
+   cp .env.example .env              # DOMAIN, TG_API_ID, TG_API_HASH, DEMO=0
    cp channels.example.json channels.json   # ваши каналы
    mkdir -p state
    docker compose run --rm dronchik python -m app.telegram_login   # один раз: телефон + код
    docker compose up -d
    ```
 4. Откройте `https://ваш-домен`. Сертификат HTTPS Caddy выпустит сам за минуту.
-5. В кабинете MapTiler (Account → Keys) ограничьте ключ своим доменом.
+5. MapTiler не нужен: карта рисует свою подложку. Если всё же подключите его ключ, ограничьте его своим доменом в кабинете MapTiler.
 
 ## 2. Мини-приложение в Telegram
 

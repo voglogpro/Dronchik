@@ -10,6 +10,7 @@
   const BASIS = { target: "по заявленному курсу", observed: "по фиксациям", hint: "по направлению" };
 
   const $ = (id) => document.getElementById(id);
+  const eta = (m) => (m <= 1 ? "< 1 мин" : `~${m} мин`);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const hhmm = (t) => new Date(t * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   const ago = (t, now) => {
@@ -25,9 +26,8 @@
     ? `https://api.maptiler.com/maps/${encodeURIComponent(cfg.maptilerStyle || "dataviz-dark")}/style.json?key=${encodeURIComponent(cfg.maptilerKey)}`
     : {
       version: 8, sources: {},
-      layers: [{ id: "bg", type: "background", paint: { "background-color": "#0e1116" } }],
+      layers: [{ id: "bg", type: "background", paint: { "background-color": "#0a0d12" } }],
     };
-  if (!cfg.maptilerKey) console.warn("MAPTILER_KEY не задан — показываем только границы регионов");
 
   const map = new maplibregl.Map({
     container: "map",
@@ -36,7 +36,7 @@
     zoom: window.innerWidth < 720 ? 4.2 : 4.6,
     minZoom: 2,
     maxZoom: 12,
-    attributionControl: { compact: true },
+    attributionControl: { compact: true, customAttribution: "Границы: © участники OpenStreetMap" },
   });
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
   // на телефоне нижнюю часть карты закрывает панель — центрируем по видимой области
@@ -44,8 +44,14 @@
 
   let regionNames = {};
   let regionGeoms = {};
+  let districtInfo = {};   // id -> {name, region, geometry}
   let lastState = null;
   let shownRegionStatus = {};
+  let shownDistrictStatus = {};
+  const STATUS_FILL = (opacity) => ["match", ["coalesce", ["feature-state", "status"], "none"],
+    "missile", opacity.missile, "uav", opacity.uav, "predicted", opacity.predicted, 0];
+  const STATUS_COLOR = ["match", ["coalesce", ["feature-state", "status"], "none"],
+    "missile", COLORS.missile, "uav", COLORS.uav, "predicted", COLORS.predicted, "#000"];
 
   const empty = () => ({ type: "FeatureCollection", features: [] });
 
@@ -55,25 +61,46 @@
   }
 
   map.on("load", async () => {
-    const regions = await (await fetch(cfg.regionsUrl || "api/regions")).json();
+    const [regions, districts, places] = await Promise.all([
+      fetch(cfg.regionsUrl || "api/regions").then((r) => r.json()),
+      fetch(cfg.districtsUrl || "api/districts").then((r) => r.json()).catch(() => empty()),
+      fetch(cfg.placesUrl || "api/places").then((r) => r.json()).catch(() => []),
+    ]);
     regions.features.forEach((f) => { regionNames[f.properties.id] = f.properties.name; regionGeoms[f.properties.id] = f.geometry; });
+    districts.features.forEach((f) => { districtInfo[f.properties.id] = { ...f.properties, geometry: f.geometry }; });
     fillRegionSelect();
 
     const before = firstSymbolLayer();
     map.addSource("regions", { type: "geojson", data: regions, promoteId: "id" });
+    map.addSource("districts", { type: "geojson", data: districts, promoteId: "id" });
+    if (!cfg.maptilerKey) {
+      // своя подложка: суша чуть светлее фона, без внешних тайлов
+      map.addLayer({ id: "land", type: "fill", source: "regions", paint: { "fill-color": "#151a22" } }, before);
+    }
     map.addLayer({
       id: "regions-fill", type: "fill", source: "regions",
+      // при приближении область бледнеет, чтобы были видны районы с фиксациями
       paint: {
-        "fill-color": ["match", ["coalesce", ["feature-state", "status"], "none"],
-          "missile", COLORS.missile, "uav", COLORS.uav, "predicted", COLORS.predicted, "#000"],
-        "fill-opacity": ["match", ["coalesce", ["feature-state", "status"], "none"],
-          "missile", 0.42, "uav", 0.36, "predicted", 0.26, 0],
+        "fill-color": STATUS_COLOR,
+        "fill-opacity": ["interpolate", ["linear"], ["zoom"],
+          5, STATUS_FILL({ missile: 0.42, uav: 0.3, predicted: 0.22 }),
+          7, STATUS_FILL({ missile: 0.25, uav: 0.12, predicted: 0.1 })],
       },
+    }, before);
+    // районы приграничных областей: подсвечиваются точнее, чем вся область
+    map.addLayer({
+      id: "districts-fill", type: "fill", source: "districts",
+      paint: { "fill-color": STATUS_COLOR, "fill-opacity": STATUS_FILL({ missile: 0.6, uav: 0.55, predicted: 0.3 }) },
+    }, before);
+    map.addLayer({
+      id: "districts-line", type: "line", source: "districts", minzoom: 5,
+      paint: { "line-color": "#4a5463", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.3, 9, 1], "line-opacity": ["interpolate", ["linear"], ["zoom"], 5, 0.3, 7, 0.8] },
     }, before);
     map.addLayer({
       id: "regions-line", type: "line", source: "regions",
-      paint: { "line-color": "#6b7686", "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.4, 8, 1.2], "line-opacity": 0.7 },
+      paint: { "line-color": "#7a8697", "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.5, 8, 1.6], "line-opacity": 0.8 },
     }, before);
+    if (!cfg.maptilerKey) addCityLabels(places);
 
     map.addSource("cones", { type: "geojson", data: empty() });
     map.addSource("predicted", { type: "geojson", data: empty() });
@@ -101,23 +128,49 @@
       },
     });
 
-    map.on("click", "regions-fill", (e) => regionPopup(e));
-    for (const id of ["regions-fill"]) {
-      map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
-      map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
-    }
+    map.on("click", (e) => {
+      const hit = map.queryRenderedFeatures(e.point, { layers: ["districts-fill", "regions-fill"] });
+      const d = hit.find((f) => f.layer.id === "districts-fill");
+      const r = hit.find((f) => f.layer.id === "regions-fill");
+      if (d || r) areaPopup(e.lngLat, d && d.properties.id, (r && r.properties.id) || (d && d.properties.region));
+    });
+    map.on("mousemove", (e) => {
+      const hit = map.queryRenderedFeatures(e.point, { layers: ["regions-fill"] });
+      map.getCanvas().style.cursor = hit.length ? "pointer" : "";
+    });
 
     if (cfg.timelineUrl) playTimeline(cfg.timelineUrl); else connect();
   });
 
-  function regionPopup(e) {
-    const id = e.features[0].properties.id;
-    const info = lastState && lastState.regions[id];
-    let html = `<b>${esc(regionNames[id] || id)}</b><br>`;
-    if (!info) html += `<span style="color:#3dd68c">Угроз не зафиксировано</span>`;
-    else if (info.status === "predicted") html += `<span style="color:${COLORS.predicted}">Вероятный подлёт через ~${info.eta_min} мин</span>`;
-    else html += `<span style="color:${COLORS[info.status]}">${LABELS[info.status]}</span><br><span class="sub">с ${hhmm(info.since)}, обновлено ${ago(info.updated, lastState.now)}</span>`;
-    new maplibregl.Popup({ maxWidth: "260px" }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+  function statusHtml(info) {
+    if (!info) return `<span style="color:#3dd68c">Угроз не зафиксировано</span>`;
+    if (info.status === "predicted") return `<span style="color:${COLORS.predicted}">Вероятный подлёт: ${eta(info.eta_min)}</span>`;
+    return `<span style="color:${COLORS[info.status]}">${LABELS[info.status]}</span><br><span class="sub">с ${hhmm(info.since)}, обновлено ${ago(info.updated, lastState.now)}</span>`;
+  }
+
+  function areaPopup(lngLat, districtId, regionId) {
+    if (!lastState) return;
+    let html = "";
+    if (districtId) html += `<b>${esc(districtInfo[districtId].name)}</b><br>${statusHtml(lastState.districts[districtId])}<hr class="sep">`;
+    html += `<b>${esc(regionNames[regionId] || regionId)}</b><br>${statusHtml(lastState.regions[regionId])}`;
+    new maplibregl.Popup({ maxWidth: "260px" }).setLngLat(lngLat).setHTML(html).addTo(map);
+  }
+
+  // Подписи городов без внешних шрифтов: DOM-метки, областные центры видны раньше остальных
+  function addCityLabels(places) {
+    for (const p of places) {
+      const el = document.createElement("div");
+      el.className = `city${p.capital ? " capital" : ""}`;
+      el.innerHTML = `<i></i><span>${esc(p.name)}</span>`;
+      new maplibregl.Marker({ element: el, anchor: "left", offset: [-4, 0] }).setLngLat([p.lon, p.lat]).addTo(map);
+    }
+    const zoomClass = () => {
+      const z = map.getZoom(), c = map.getContainer().classList;
+      c.toggle("z-capitals", z >= 4.6);
+      c.toggle("z-towns", z >= 6.4);
+    };
+    map.on("zoom", zoomClass);
+    zoomClass();
   }
 
   // ---------- данные ----------
@@ -131,6 +184,14 @@
       if (shownRegionStatus[id] !== st) {
         map.setFeatureState({ source: "regions", id }, { status: st });
         shownRegionStatus[id] = st;
+      }
+    }
+    const dstates = state.districts || {};
+    for (const id of Object.keys(districtInfo)) {
+      const st = dstates[id] ? dstates[id].status : "none";
+      if (shownDistrictStatus[id] !== st) {
+        map.setFeatureState({ source: "districts", id }, { status: st });
+        shownDistrictStatus[id] = st;
       }
     }
 
@@ -190,12 +251,13 @@
     const last = tr.points[tr.points.length - 1];
     const pr = tr.prediction;
     let html = `<b>Цель #${tr.id}${tr.count > 1 ? ` · ${tr.count} БПЛА` : ""}</b><br>`;
-    html += `Последняя фиксация: ${esc(last.place)}, ${ago(last.t, now)}<br>`;
+    html += `Последняя фиксация: ${esc(last.place)}${last.district_name && last.district_name !== last.place ? ` (${esc(last.district_name)})` : ""}, ${ago(last.t, now)}<br>`;
     html += `Источников: ${new Set(tr.points.flatMap((p) => p.sources)).size}, точек: ${tr.points.length}`;
     if (pr) {
       html += `<br>Курс ${pr.bearing}°, ~${pr.speed} км/ч (${BASIS[pr.basis]})`;
       if (tr.target) html += `<br>Заявленная цель: ${esc(tr.target)}`;
-      if (pr.regions_eta.length) html += `<br>Может войти: ${pr.regions_eta.slice(0, 3).map((r) => `${esc(r.name)} ~${r.eta_min} мин`).join(", ")}`;
+      if (pr.districts_eta && pr.districts_eta.length) html += `<br>Ближайшие районы: ${pr.districts_eta.slice(0, 3).map((r) => `${esc(r.name)} ${eta(r.eta_min)}`).join(", ")}`;
+      if (pr.regions_eta.length) html += `<br>Может войти: ${pr.regions_eta.slice(0, 3).map((r) => `${esc(r.name)} ${eta(r.eta_min)}`).join(", ")}`;
     }
     return html;
   }
@@ -211,16 +273,22 @@
       <div class="stat"><b>${active.reduce((s, t) => s + t.count, 0)}</b><span>целей в воздухе</span></div>
       <div class="stat"><b>${counts.pred}</b><span>на пути подлёта</span></div>`;
 
-    $("alert-list").innerHTML = regions.length ? regions.map(([id, r]) => `
-      <li data-region="${esc(id)}">
-        <div class="row"><span>${esc(r.name)}</span><span class="badge ${r.status}">${r.status === "predicted" ? `~${r.eta_min} мин` : LABELS[r.status]}</span></div>
+    const byRegion = {};
+    for (const [id, d] of Object.entries(state.districts || {})) (byRegion[d.region] ||= []).push(d);
+    $("alert-list").innerHTML = regions.length ? regions.map(([id, r]) => {
+      const ds = (byRegion[id] || []).filter((d) => d.status !== "predicted").map((d) => esc(d.name));
+      return `<li data-region="${esc(id)}">
+        <div class="row"><span>${esc(r.name)}</span><span class="badge ${r.status}">${r.status === "predicted" ? eta(r.eta_min) : LABELS[r.status]}</span></div>
         <div class="sub">${r.status === "predicted" ? "по прогнозу маршрута" : `с ${hhmm(r.since)} · обновлено ${ago(r.updated, state.now)}`}</div>
-      </li>`).join("") : `<li class="empty">Активных тревог нет</li>`;
+        ${ds.length ? `<div class="sub districts">Районы: ${ds.join(", ")}</div>` : ""}
+      </li>`;
+    }).join("") : `<li class="empty">Активных тревог нет</li>`;
 
     $("track-list").innerHTML = active.length ? active.map((tr) => {
       const last = tr.points[tr.points.length - 1];
       const pr = tr.prediction;
-      const next = pr && pr.regions_eta.length ? `→ ${esc(pr.regions_eta[0].name)} ~${pr.regions_eta[0].eta_min} мин` : (tr.target ? `→ ${esc(tr.target)}` : "курс не определён");
+      const nextArea = pr && ((pr.districts_eta && pr.districts_eta[0]) || pr.regions_eta[0]);
+      const next = nextArea ? `→ ${esc(nextArea.name)} ${eta(nextArea.eta_min)}` : (tr.target ? `→ ${esc(tr.target)}` : "курс не определён");
       return `<li data-track="${tr.id}">
         <div class="row"><span>#${tr.id} · ${esc(last.place)}${tr.count > 1 ? ` · ×${tr.count}` : ""}</span><span class="sub">${ago(last.t, state.now)}</span></div>
         <div class="sub">${next}</div></li>`;
@@ -266,7 +334,20 @@
     Object.entries(regionNames).sort((a, b) => a[1].localeCompare(b[1], "ru"))
       .forEach(([id, name]) => sel.add(new Option(name, id)));
     sel.value = store.get("myRegion") || "";
-    sel.addEventListener("change", () => { store.set("myRegion", sel.value); myLast = undefined; if (lastState) checkMyRegion(lastState); });
+    const dsel = $("my-district");
+    const fillDistricts = () => {
+      const list = Object.entries(districtInfo).filter(([, d]) => d.region === sel.value)
+        .sort((a, b) => a[1].name.localeCompare(b[1].name, "ru"));
+      dsel.length = 1;
+      list.forEach(([id, d]) => dsel.add(new Option(d.name, id)));
+      $("my-district-field").hidden = !list.length;
+    };
+    fillDistricts();
+    dsel.value = store.get("myDistrict") || "";
+    if (dsel.selectedIndex < 0) dsel.value = "";
+    const changed = () => { store.set("myRegion", sel.value); store.set("myDistrict", dsel.value); myLast = undefined; if (lastState) checkMyRegion(lastState); };
+    sel.addEventListener("change", () => { fillDistricts(); dsel.value = ""; changed(); });
+    dsel.addEventListener("change", changed);
     if ("Notification" in window && Notification.permission === "default") $("notify-btn").hidden = false;
     $("notify-btn").addEventListener("click", async () => {
       await Notification.requestPermission();
@@ -277,15 +358,20 @@
   let myLast;
   function checkMyRegion(state) {
     const id = $("my-region").value;
+    const did = $("my-district").value;
     const box = $("my-region-status");
     if (!id) { box.hidden = true; return; }
-    const info = state.regions[id];
+    // выбран район — смотрим на него; если в районе тихо, но область под тревогой, показываем область
+    const dinfo = did ? (state.districts || {})[did] : null;
+    const rinfo = state.regions[id];
+    const info = dinfo || rinfo;
     const st = info ? info.status : "none";
+    const where = dinfo ? districtInfo[did].name : regionNames[id];
     box.hidden = false;
     box.className = `my-status ${st}`;
     box.textContent = !info ? "Угроз не зафиксировано" :
-      st === "predicted" ? `Возможен подлёт БПЛА через ~${info.eta_min} мин` : LABELS[st];
-    if (myLast !== undefined && (SEVERITY[st] || 0) > (SEVERITY[myLast] || 0)) alertUser(regionNames[id], box.textContent);
+      (st === "predicted" ? `Возможен подлёт БПЛА: ${eta(info.eta_min)}` : LABELS[st]) + (did ? ` · ${where}` : "");
+    if (myLast !== undefined && (SEVERITY[st] || 0) > (SEVERITY[myLast] || 0)) alertUser(where, box.textContent);
     myLast = st;
   }
 

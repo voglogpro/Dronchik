@@ -38,6 +38,7 @@ class TrackPoint:
     t: float
     place: str
     region_id: str
+    district_id: str | None = None
     sources: set[str] = field(default_factory=set)
     count: int = 1
 
@@ -96,6 +97,7 @@ class Prediction:
     speed: float
     basis: str
     regions_eta: dict[str, int]               # регион -> минут до входа (по прогнозу)
+    districts_eta: dict[str, int]             # район -> минут до входа
 
 
 class Tracker:
@@ -117,7 +119,7 @@ class Tracker:
             p.count = max(p.count, count)
         else:
             track = self._associate(place, t, target, bearing)
-            point = TrackPoint(place.lat, place.lon, t, place.name, place.region_id, {source}, count)
+            point = TrackPoint(place.lat, place.lon, t, place.name, place.region_id, place.district_id, {source}, count)
             if track is None:
                 track = Track(next(self._ids), [point])
                 self.tracks.append(track)
@@ -131,6 +133,8 @@ class Tracker:
             track.target = target
         if bearing is not None:
             track.bearing_hint = bearing
+            if target is None:
+                track.target = None  # новое направление без цели отменяет старую цель
         track.count = max(track.count, count)
         return track
 
@@ -234,23 +238,28 @@ class Tracker:
             cone_right.append(destination(lat, lon, bearing + 90, spread))
         cone = [(start_lat, start_lon), *cone_left, *reversed(cone_right), (start_lat, start_lon)]
 
-        regions_eta = self._regions_eta(track, path, cone, speed)
-        return Prediction(path, cone, bearing, speed, basis, regions_eta)
-
-    def _regions_eta(self, track: Track, path, cone, speed: float) -> dict[str, int]:
-        """Регионы, в которые заходит конус прогноза, и минуты до ближайшей точки входа."""
-        start_lat, start_lon = path[0]
-        start = Point(start_lon, start_lat)
-        current = {track.last.region_id, self.gaz.region_at(start_lat, start_lon)}
-        zone_geom = Polygon([(lon, lat) for lat, lon in cone]) if len(cone) >= 4 \
+        zone = Polygon([(lon, lat) for lat, lon in cone]) if len(cone) >= 4 \
             else LineString([(lon, lat) for lat, lon in path])
+        start_lat, start_lon = path[0]
+        regions_eta = self._eta(self.gaz.regions.values(), zone, path[0], speed,
+                                {track.last.region_id, self.gaz.region_at(start_lat, start_lon)})
+        # районы есть только у части областей; текущий район тоже исключаем
+        districts_eta = self._eta(self.gaz.districts.values(), zone, path[0], speed,
+                                  {track.last.district_id, self.gaz.district_at(start_lat, start_lon)})
+        return Prediction(path, cone, bearing, speed, basis, regions_eta, districts_eta)
+
+    @staticmethod
+    def _eta(areas, zone_geom, start_latlon, speed: float, exclude: set) -> dict[str, int]:
+        """Территории, в которые заходит конус прогноза, и минуты до ближайшей точки входа."""
+        start_lat, start_lon = start_latlon
+        start = Point(start_lon, start_lat)
         out: dict[str, int] = {}
-        for region in self.gaz.regions.values():
-            if region.id in current or not region.geometry.intersects(zone_geom):
+        for area in areas:
+            if area.id in exclude or not area.geometry.intersects(zone_geom):
                 continue
-            zone = region.geometry.intersection(zone_geom)
+            zone = area.geometry.intersection(zone_geom)
             if zone.is_empty:
                 continue
             nearest = nearest_points(zone, start)[0]
-            out[region.id] = int(round(haversine_km(start_lat, start_lon, nearest.y, nearest.x) / speed * 60))
+            out[area.id] = int(round(haversine_km(start_lat, start_lon, nearest.y, nearest.x) / speed * 60))
         return dict(sorted(out.items(), key=lambda x: x[1]))

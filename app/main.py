@@ -92,6 +92,16 @@ def regions() -> FileResponse:
     return FileResponse(ROOT / "data" / "regions.geojson", media_type="application/geo+json")
 
 
+@app.get("/api/districts")
+def districts() -> FileResponse:
+    return FileResponse(ROOT / "data" / "districts.geojson", media_type="application/geo+json")
+
+
+@app.get("/api/places")
+def places() -> list[dict]:
+    return gazetteer.map_labels()
+
+
 @app.get("/config.js")
 def config_js() -> Response:
     cfg = {"maptilerKey": settings.maptiler_key, "maptilerStyle": settings.maptiler_style, "demo": settings.demo}

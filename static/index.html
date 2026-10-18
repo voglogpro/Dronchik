@@ -32,6 +32,10 @@
           <span>Моя область</span>
           <select id="my-region"><option value="">— не выбрана —</option></select>
         </label>
+        <label class="field" id="my-district-field" hidden>
+          <span>Мой район</span>
+          <select id="my-district"><option value="">— вся область —</option></select>
+        </label>
         <div id="my-region-status" class="my-status" hidden></div>
         <button id="notify-btn" class="btn" hidden>Включить уведомления</button>
       </section>
@@ -63,6 +67,7 @@
     <span><i class="sw sw-missile"></i>Ракетная опасность</span>
     <span><i class="sw sw-uav"></i>Угроза БПЛА</span>
     <span><i class="sw sw-predicted"></i>Вероятный подлёт ≤ 60 мин</span>
+    <span><i class="sw sw-district"></i>Район с фиксацией</span>
     <span><i class="ln ln-obs"></i>Пройденный путь</span>
     <span><i class="ln ln-pred"></i>Прогноз</span>
   </div>

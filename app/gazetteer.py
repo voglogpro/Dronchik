@@ -13,6 +13,8 @@ from pathlib import Path
 from shapely.geometry import Point, shape
 from shapely.prepared import prep
 
+from .geo import haversine_km
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 LETTER = "а-яёa-z"
@@ -92,7 +94,8 @@ class Place:
     region_id: str
     lat: float
     lon: float
-    kind: str = "city"  # city | region
+    kind: str = "city"  # city | district | region
+    district_id: str | None = None
 
 
 @dataclass
@@ -102,6 +105,20 @@ class Region:
     geometry: object
     prepared: object = field(repr=False)
     center: tuple[float, float] = (0.0, 0.0)  # lat, lon
+
+
+@dataclass
+class District:
+    id: str
+    name: str
+    region_id: str
+    geometry: object
+    prepared: object = field(repr=False)
+    center: tuple[float, float] = (0.0, 0.0)  # lat, lon
+
+
+# «Шебекинский район», «Грайворонского р-на», «Раменский г.о.», «Губкинском округе»
+DISTRICT_SUFFIX = r"\s+(?:район|р-н|р\.|округ|го(?![а-яё])|г\.\s?о\.?|городск|муниципальн)"
 
 
 @dataclass
@@ -121,13 +138,43 @@ class Gazetteer:
             rid = f["properties"]["id"]
             self.regions[rid] = Region(rid, f["properties"]["name"], geom, prep(geom), (rp.y, rp.x))
 
+        self.districts: dict[str, District] = {}
+        district_patterns: dict[str, list[Place]] = {}
+        districts_file = data_dir / "districts.geojson"
+        if districts_file.exists():
+            for f in json.loads(districts_file.read_text(encoding="utf-8"))["features"]:
+                props = f["properties"]
+                geom = shape(f["geometry"]).buffer(0)
+                rp = geom.representative_point()
+                d = District(props["id"], props["name"], props["region"], geom, prep(geom), (rp.y, rp.x))
+                self.districts[d.id] = d
+                place = Place(d.name, d.region_id, d.center[0], d.center[1], kind="district", district_id=d.id)
+                core = re.sub(r"(?i)\b(?:городской|округ|район|г\.о\.)\b", " ", props["raw"]).strip()
+                core = normalize(re.sub(r"\s+", " ", core))
+                adjective = bool(re.search(r"(ий|ый|ой)$", core))
+                if not adjective and " " not in core:
+                    # округ, названный по городу: «Шебекино» → «Шебекинский округ», «Алексеевка» → «Алексеевский»
+                    if core.endswith("ск"):
+                        core += "ий"
+                    else:
+                        core = (core[:-2] if core.endswith("ка") else word_stem(core)) + "ский"
+                stem = r"[\s\-]+".join(re.escape(word_stem(w)) + f"[{LETTER}]{{0,3}}" for w in re.split(r"[\s\-]+", core))
+                pat = rf"(?<![{LETTER}]){stem}{DISTRICT_SUFFIX}[{LETTER}.]*"
+                same = district_patterns.setdefault(pat, [])
+                # «Курский район» и г.о. «Курск» в одной области — оставляем настоящий район
+                if adjective:
+                    same[:] = [c for c in same if c.region_id != d.region_id] + [place]
+                elif not any(c.region_id == d.region_id for c in same):
+                    same.append(place)
+        self._district_res = [(re.compile(p), pls) for p, pls in sorted(district_patterns.items(), key=lambda x: -len(x[0]))]
+
         places_raw = json.loads((data_dir / "places.json").read_text(encoding="utf-8"))["places"]
         self.places: list[Place] = []
         patterns: list[tuple[str, Place]] = []
         for name, region_id, lat, lon, aliases in places_raw:
             if region_id not in self.regions:
                 raise ValueError(f"places.json: неизвестный регион {region_id} у {name}")
-            place = Place(name, region_id, lat, lon)
+            place = Place(name, region_id, lat, lon, district_id=self.district_at(lat, lon, region_id))
             self.places.append(place)
             for form in [name, *aliases]:
                 patterns.append((phrase_pattern(form, exact=form in EXACT_ALIASES), place))
@@ -152,11 +199,13 @@ class Gazetteer:
         self._place_res = [(re.compile(p), pl) for p, pl in sorted(patterns, key=lambda x: -len(x[0]))]
         self.by_name = {normalize(p.name): p for p in self.places}
 
-    def find(self, text: str) -> list[Mention]:
-        """Все упоминания регионов и городов в тексте, без пересечений, в порядке появления.
+    def find(self, text: str, context_region: str | None = None) -> list[Mention]:
+        """Все упоминания регионов, районов и городов в тексте, без пересечений, в порядке появления.
 
-        Сначала ищем регионы («Курской области»), потом города в оставшемся тексте,
-        чтобы «Курская область» не превращалась в город Курск.
+        Порядок поиска: регионы («Курской области») → районы («Курский район») → города,
+        чтобы «Курская область» и «Курский район» не превращались в город Курск.
+        Одноимённые районы («Октябрьский район» есть в нескольких областях) выбираются
+        по региону, упомянутому в тексте, или по context_region.
         """
         norm = normalize(text)
         taken = [False] * len(norm)
@@ -172,9 +221,41 @@ class Gazetteer:
                     found.append(Mention(m.start(), m.end(), place))
 
         scan(self._region_res)
+        context = {m.place.region_id for m in found} or ({context_region} if context_region else set())
+        for rx, candidates in self._district_res:
+            for m in rx.finditer(norm):
+                if any(taken[m.start():m.end()]):
+                    continue
+                matching = [c for c in candidates if c.region_id in context] if len(candidates) > 1 else candidates
+                if len(matching) != 1:
+                    continue
+                for i in range(m.start(), m.end()):
+                    taken[i] = True
+                found.append(Mention(m.start(), m.end(), matching[0]))
         scan(self._place_res)
         found.sort(key=lambda x: x.start)
         return found
+
+    def map_labels(self) -> list[dict]:
+        """Города для подписей на карте; первый город региона в places.json — его центр."""
+        seen: set[str] = set()
+        capitals: list[Place] = []
+        out = []
+        for p in self.places:
+            # центр рядом с другим центром (Красногорск у Москвы) подписываем как обычный город
+            capital = p.region_id not in seen and all(haversine_km(p.lat, p.lon, c.lat, c.lon) > 60 for c in capitals)
+            if capital:
+                capitals.append(p)
+            out.append({"name": p.name, "lat": p.lat, "lon": p.lon, "capital": capital})
+            seen.add(p.region_id)
+        return out
+
+    def district_at(self, lat: float, lon: float, region_id: str | None = None) -> str | None:
+        pt = Point(lon, lat)
+        for d in self.districts.values():
+            if (region_id is None or d.region_id == region_id) and d.prepared.contains(pt):
+                return d.id
+        return None
 
     def region_at(self, lat: float, lon: float) -> str | None:
         pt = Point(lon, lat)

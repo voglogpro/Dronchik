@@ -52,7 +52,8 @@ def main(out: str, maplibre_css: str, key: str = "") -> None:
     body = html[html.index("<body>") + len("<body>"):html.index("</body>")]
     body = body.replace('<script src="https://telegram.org/js/telegram-web-app.js"></script>\n', "")
     cfg = {"maptilerKey": key, "maptilerStyle": "dataviz-dark", "demo": True,
-           "regionsUrl": "regions.geojson", "timelineUrl": "demo-timeline.json"}
+           "regionsUrl": "regions.geojson", "districtsUrl": "districts.geojson", "placesUrl": "places.json",
+           "timelineUrl": "demo-timeline.json"}
     body = body.replace('<script src="config.js"></script>', f"<script>window.APP_CONFIG = {json.dumps(cfg)};</script>")
     head = (
         '<meta charset="utf-8">\n'
@@ -66,6 +67,8 @@ def main(out: str, maplibre_css: str, key: str = "") -> None:
     (out_dir / "style.css").write_text(css + "\n" + (static / "style.css").read_text(encoding="utf-8"), encoding="utf-8")
     (out_dir / "app.js").write_text((static / "app.js").read_text(encoding="utf-8"), encoding="utf-8")
     (out_dir / "regions.geojson").write_text((ROOT / "data" / "regions.geojson").read_text(encoding="utf-8"), encoding="utf-8")
+    (out_dir / "districts.geojson").write_text((ROOT / "data" / "districts.geojson").read_text(encoding="utf-8"), encoding="utf-8")
+    (out_dir / "places.json").write_text(json.dumps(Gazetteer().map_labels(), ensure_ascii=False), encoding="utf-8")
     timeline = json.dumps(build_timeline(), ensure_ascii=False, separators=(",", ":"))
     (out_dir / "demo-timeline.json").write_text(timeline, encoding="utf-8")
     print(f"готово: {out_dir}, таймлайн {len(timeline) // 1024} КБ")

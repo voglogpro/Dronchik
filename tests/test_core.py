@@ -137,3 +137,39 @@ def test_old_clear_does_not_cancel_newer_alert(gaz):
     e.process("a", "Угроза атаки БПЛА в Курской области", T0 + 600)
     e.process("b", "Отбой по Курской области", T0)  # пришло с задержкой
     assert "kursk-oblast" in e.snapshot(T0 + 700)["regions"]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("БПЛА в Шебекинском районе", ("Шебекино", "district")),
+    ("Грайворонский р-н: угроза", ("Грайворонский район", "district")),
+    ("над Губкинским округом", ("Губкинский округ", "district")),
+    ("Раменский г.о. — беспилотник", ("Раменский г.о.", "district")),
+])
+def test_gazetteer_districts(gaz, text, expected):
+    m = gaz.find(text)[0]
+    assert (m.place.name, m.place.kind) == expected
+
+
+def test_same_named_district_needs_region_context(gaz):
+    assert gaz.find("Октябрьский район") == []
+    ms = gaz.find("Октябрьский район Курской области")
+    assert ms[0].place.district_id == "kursk-oblast/oktyabrskiy-rayon"
+    # «Курский район» — район, а не город Курск
+    assert [m.place.kind for m in gaz.find("Курский район и Курск")] == ["district", "city"]
+
+
+def test_city_gets_its_district(gaz):
+    p = {pl.name: pl for pl in gaz.places}
+    assert p["Короча"].district_id == "belgorod-oblast/korochanskiy-rayon"
+    assert p["Казань"].district_id is None  # для дальних регионов районов нет
+
+
+def test_engine_district_alerts(gaz):
+    e = Engine(gaz)
+    e.process("a", "Белгородская область:\nБПЛА в Шебекинском районе, курс на Корочу", T0)
+    e.process("a", "🛵 БПЛА над Корочей", T0 + 600)
+    snap = e.snapshot(T0 + 660)
+    assert snap["districts"]["belgorod-oblast/korochanskiy-rayon"]["status"] == "uav"
+    assert any(d["status"] == "predicted" for d in snap["districts"].values())
+    e.process("a", "Отбой по Белгородской области", T0 + 900)
+    assert not [d for d in e.snapshot(T0 + 910)["districts"].values() if d["status"] != "predicted"]

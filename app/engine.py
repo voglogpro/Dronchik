@@ -10,7 +10,9 @@ from .tracker import Tracker
 
 UAV_ALERT_TTL_S = 2 * 3600       # каналы часто забывают писать «отбой»
 MISSILE_ALERT_TTL_S = 3600
+DISTRICT_ALERT_TTL_S = 50 * 60   # район подсвечиваем, пока по нему свежие фиксации
 PREDICT_WARN_MINUTES = 60        # регион «жёлтый», если прогноз заходит в него в течение часа
+DISTRICT_PREDICT_WARN_MINUTES = 30  # для районов горизонт короче, иначе жёлтым красится полобласти
 
 SEVERITY = {"missile": 3, "uav": 2, "predicted": 1}
 
@@ -29,6 +31,7 @@ class Engine:
         self.tracker = Tracker(gazetteer)
         self.channel_regions = channel_regions or {}
         self.alerts: dict[str, RegionAlert] = {}
+        self.district_alerts: dict[str, RegionAlert] = {}
         self.feed: deque[dict] = deque(maxlen=60)
         self.version = 0
 
@@ -38,17 +41,25 @@ class Engine:
             return events
         for ev in events:
             if ev.kind == CLEAR:
-                for rid in ev.region_ids:
-                    alert = self.alerts.get(rid)
-                    if alert and t >= alert.updated:
-                        del self.alerts[rid]
-                self.tracker.clear_regions(ev.region_ids, t)
+                if ev.district_ids:
+                    # «Отбой по Шебекинскому округу» — снимаем только районы
+                    self._clear(self.district_alerts, ev.district_ids, t)
+                else:
+                    self._clear(self.alerts, ev.region_ids, t)
+                    self._clear(self.district_alerts, [d for d in self.district_alerts
+                                                       if self.gaz.districts[d].region_id in ev.region_ids], t)
+                    self.tracker.clear_regions(ev.region_ids, t)
             elif ev.kind in (UAV_ALERT, MISSILE_ALERT):
+                status = "missile" if ev.kind == MISSILE_ALERT else "uav"
                 for rid in ev.region_ids:
-                    self._raise(rid, "missile" if ev.kind == MISSILE_ALERT else "uav", t)
+                    self._raise(self.alerts, rid, status, t)
+                for did in ev.district_ids:
+                    self._raise(self.district_alerts, did, status, t)
             elif ev.kind == SIGHTING:
                 self.tracker.add_sighting(ev.place, t, channel, ev.count, ev.target, ev.bearing)
-                self._raise(ev.place.region_id, "uav", t)
+                self._raise(self.alerts, ev.place.region_id, "uav", t)
+                for did in ev.district_ids:
+                    self._raise(self.district_alerts, did, "uav", t)
             elif ev.kind == HEADING:
                 self.tracker.add_heading(ev.region_ids, ev.target, t)
             elif ev.kind == DESTROYED:
@@ -61,10 +72,18 @@ class Engine:
         self.version += 1
         return events
 
-    def _raise(self, region_id: str, status: str, t: float) -> None:
-        alert = self.alerts.get(region_id)
+    @staticmethod
+    def _clear(alerts: dict[str, RegionAlert], ids, t: float) -> None:
+        for key in list(ids):
+            alert = alerts.get(key)
+            if alert and t >= alert.updated:
+                del alerts[key]
+
+    @staticmethod
+    def _raise(alerts: dict[str, RegionAlert], key: str, status: str, t: float) -> None:
+        alert = alerts.get(key)
         if alert is None:
-            self.alerts[region_id] = RegionAlert(status, t, t)
+            alerts[key] = RegionAlert(status, t, t)
             return
         alert.updated = max(alert.updated, t)
         if SEVERITY[status] > SEVERITY[alert.status]:
@@ -75,6 +94,10 @@ class Engine:
             ttl = MISSILE_ALERT_TTL_S if alert.status == "missile" else UAV_ALERT_TTL_S
             if now - alert.updated > ttl:
                 del self.alerts[rid]
+        for did, alert in list(self.district_alerts.items()):
+            # район не может оставаться под угрозой, если по его области уже дали отбой
+            if now - alert.updated > DISTRICT_ALERT_TTL_S or self.gaz.districts[did].region_id not in self.alerts:
+                del self.district_alerts[did]
         self.tracker.expire(now)
 
     def snapshot(self, now: float) -> dict:
@@ -82,6 +105,10 @@ class Engine:
         regions: dict[str, dict] = {
             rid: {"status": a.status, "since": a.since, "updated": a.updated}
             for rid, a in self.alerts.items()
+        }
+        districts: dict[str, dict] = {
+            did: {"status": a.status, "since": a.since, "updated": a.updated}
+            for did, a in self.district_alerts.items()
         }
         tracks = []
         for tr in self.tracker.tracks:
@@ -92,6 +119,7 @@ class Engine:
                 "target": tr.target.name if tr.target else None,
                 "points": [
                     {"lat": p.lat, "lon": p.lon, "t": p.t, "place": p.place, "region": p.region_id,
+                     "district": p.district_id, "district_name": self._district_name(p.district_id),
                      "sources": sorted(p.sources), "count": p.count}
                     for p in tr.points
                 ],
@@ -107,16 +135,32 @@ class Engine:
                             {"id": rid, "name": self.gaz.regions[rid].name, "eta_min": eta}
                             for rid, eta in pred.regions_eta.items()
                         ],
+                        "districts_eta": [
+                            {"id": did, "name": self.gaz.districts[did].name, "eta_min": eta}
+                            for did, eta in list(pred.districts_eta.items())[:8]
+                        ],
                     }
-                    for rid, eta in pred.regions_eta.items():
-                        if eta > PREDICT_WARN_MINUTES:
-                            continue
-                        cur = regions.get(rid)
-                        if cur is None:
-                            regions[rid] = {"status": "predicted", "eta_min": eta, "since": now, "updated": now}
-                        elif cur["status"] == "predicted":
-                            cur["eta_min"] = min(cur["eta_min"], eta)
+                    mark_predicted(regions, pred.regions_eta, now, PREDICT_WARN_MINUTES)
+                    mark_predicted(districts, pred.districts_eta, now, DISTRICT_PREDICT_WARN_MINUTES)
             tracks.append(item)
         for rid, info in regions.items():
             info["name"] = self.gaz.regions[rid].name
-        return {"now": now, "version": self.version, "regions": regions, "tracks": tracks, "feed": list(self.feed)}
+        for did, info in districts.items():
+            info["name"] = self.gaz.districts[did].name
+            info["region"] = self.gaz.districts[did].region_id
+        return {"now": now, "version": self.version, "regions": regions, "districts": districts,
+                "tracks": tracks, "feed": list(self.feed)}
+
+    def _district_name(self, did: str | None) -> str | None:
+        return self.gaz.districts[did].name if did else None
+
+
+def mark_predicted(areas: dict[str, dict], eta_by_id: dict[str, int], now: float, horizon_min: int) -> None:
+    for key, eta in eta_by_id.items():
+        if eta > horizon_min:
+            continue
+        cur = areas.get(key)
+        if cur is None:
+            areas[key] = {"status": "predicted", "eta_min": eta, "since": now, "updated": now}
+        elif cur["status"] == "predicted":
+            cur["eta_min"] = min(cur["eta_min"], eta)
