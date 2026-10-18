@@ -520,3 +520,28 @@ details.sec:not([open]) > summary h2 { margin-bottom: 6px; }
 .drone span { font-size: 11px; }
 .drone .scope { inset: -7px; border-width: 1.5px; }
 .ln-origin { border-top: 2px dotted var(--track); }
+
+
+/* ============ Единое окно сведений ============ */
+.info-pop { z-index: 6; }
+.info-pop .maplibregl-popup-content { background: rgba(20, 25, 33, .97); color: var(--text); border: 1px solid var(--panel-border);
+  border-radius: 14px; padding: 13px 16px 12px; font-size: 13px; line-height: 1.45; box-shadow: 0 16px 40px rgba(0, 0, 0, .55); }
+.info-pop .maplibregl-popup-close-button { font-size: 20px; padding: 2px 9px; color: var(--muted); border-radius: 0 14px 0 8px; }
+.info-pop .maplibregl-popup-close-button:hover { background: rgba(255, 255, 255, .08); color: var(--text); }
+.info-pop.maplibregl-popup-anchor-top .maplibregl-popup-tip, .info-pop.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+.info-pop.maplibregl-popup-anchor-top-right .maplibregl-popup-tip { border-bottom-color: rgba(20, 25, 33, .97) !important; }
+.info-pop.maplibregl-popup-anchor-bottom .maplibregl-popup-tip, .info-pop.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+.info-pop.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip { border-top-color: rgba(20, 25, 33, .97) !important; }
+.pop { min-width: 190px; }
+.pop > b:first-child { font-size: 14.5px; }
+.pop-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding-right: 16px; font-size: 15px; font-weight: 700; line-height: 1.25; }
+.pop-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: #3a4352; color: #fff; white-space: nowrap; }
+.pop-badge.missile { background: var(--missile); } .pop-badge.uav { background: var(--uav); color: #1a1004; }
+.pop-badge.warn { background: #efe08a; color: #1a1404; } .pop-badge.predicted { background: var(--predicted); color: #1a1404; }
+.pop-meta, .pop-row { margin-top: 6px; }
+.pop-row .sub { margin-top: 1px; }
+.pop-sub { margin-top: 6px; color: var(--muted); font-size: 12.5px; }
+.pop-ok { margin-top: 6px; color: var(--ok); }
+.pop-src { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--panel-border); font-size: 12px; color: var(--muted); }
+.pop-region { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--panel-border); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.pop-region .sub { flex-basis: 100%; margin-top: 0; }

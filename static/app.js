@@ -200,7 +200,9 @@
       const hit = map.queryRenderedFeatures(e.point, { layers: ["districts-fill", "regions-fill"] });
       const d = hit.find((f) => f.layer.id === "districts-fill");
       const r = hit.find((f) => f.layer.id === "regions-fill");
+      if (e.originalEvent.target.closest && e.originalEvent.target.closest(MARKER_SEL)) return;
       if (d || r) areaPopup(e.lngLat, d && d.properties.id, (r && r.properties.id) || (d && d.properties.region));
+      else popup.remove();   // клик в пустое место закрывает окно
     });
     map.on("mousemove", (e) => {
       const hit = map.queryRenderedFeatures(e.point, { layers: ["regions-fill"] });
@@ -215,19 +217,53 @@
   map.on("zoom", zoomFine);
   map.on("load", zoomFine);
 
-  function statusHtml(info) {
-    if (!info) return `<span style="color:#3dd68c">Угроз не зафиксировано</span>`;
-    if (info.status === "predicted") return `<span style="color:${COLORS.predicted}">Вероятный подлёт: ${eta(info.eta_min)}</span>`;
-    return `<span style="color:${COLORS[info.status]}">${LABELS[info.status]}</span><br><span class="sub">с ${hhmm(info.since)}, обновлено ${ago(info.updated, lastState.now)}</span>`
-      + (info.channels && info.channels.length ? `<br><span class="sub">Источник: ${channelLinks(info.channels)}</span>` : "");
+  // Одно окно на всю карту: новое открывается вместо прежнего, а не поверх него
+  const popup = new maplibregl.Popup({ maxWidth: "300px", offset: 16, className: "info-pop", closeOnClick: false });
+  let popupOwner = null;
+  const MARKER_SEL = ".drone, .alert-mark, .shoot-mark, .launch-mark, .eta-mark, .fc-arrow";
+  function showPopup(lngLat, html, owner = null) {
+    popupOwner = owner;
+    popup.setLngLat(lngLat).setHTML(`<div class="pop">${html}</div>`).addTo(map);
+  }
+  popup.on("close", () => { popupOwner = null; });
+  // значок открывает окно сам, а клик по нему не доходит до карты (там открылось бы ещё и окно области)
+  function bindPopup(marker, el) {
+    el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (el._html) showPopup(marker.getLngLat(), el._html, marker);
+    });
   }
 
+  const badge = (status) => `<span class="pop-badge ${status}">${status === "predicted" ? "Вероятный подлёт" : LABELS[status]}</span>`;
+  const srcLine = (channels, limit = 3) => {
+    const list = channels || [];
+    if (!list.length) return "";
+    const shown = channelLinks(list.slice(0, limit));
+    return `<div class="pop-src">Источники: ${shown}${list.length > limit ? ` и ещё ${list.length - limit}` : ""}</div>`;
+  };
+  const areaInfo = (info) => {
+    if (!info) return `<div class="pop-ok">Угроз не зафиксировано</div>`;
+    if (info.status === "predicted") return `<div class="pop-row">${badge("predicted")} <span class="sub">через ${eta(info.eta_min)}</span></div>`;
+    return `<div class="pop-meta">с ${hhmm(info.since)} · обновлено ${ago(info.updated, lastState.now)}</div>${srcLine(info.channels)}`;
+  };
+
+  // Клик по району или области: одно окно — район (если есть) и область общей строкой
   function areaPopup(lngLat, districtId, regionId) {
     if (!lastState) return;
-    let html = "";
-    if (districtId) html += `<b>${esc(districtInfo[districtId].name)}</b><br>${statusHtml(lastState.districts[districtId])}<hr class="sep">`;
-    html += `<b>${esc(regionNames[regionId] || regionId)}</b><br>${statusHtml(lastState.regions[regionId])}`;
-    new maplibregl.Popup({ maxWidth: "260px" }).setLngLat(lngLat).setHTML(html).addTo(map);
+    const dInfo = districtId && lastState.districts[districtId];
+    const rInfo = lastState.regions[regionId];
+    const rName = esc(regionNames[regionId] || regionId);
+    const dCount = Object.values(lastState.districts || {}).filter((d) => d.region === regionId && d.status !== "predicted").length;
+    let html;
+    if (districtId) {
+      html = `<div class="pop-title">${esc(districtInfo[districtId].name)}${dInfo ? badge(dInfo.status) : ""}</div>${areaInfo(dInfo)}`
+        + `<div class="pop-region"><b>${rName}</b>${rInfo ? badge(rInfo.status) : ""}`
+        + `${dCount > 1 ? `<div class="sub">районов с тревогой: ${dCount}</div>` : ""}</div>`;
+    } else {
+      html = `<div class="pop-title">${rName}${rInfo ? badge(rInfo.status) : ""}</div>${areaInfo(rInfo)}`
+        + (dCount ? `<div class="pop-sub">районов с тревогой: ${dCount}</div>` : "");
+    }
+    showPopup(lngLat, html);
   }
 
   // Подписи городов без внешних шрифтов: DOM-метки, областные центры видны раньше остальных
@@ -422,11 +458,11 @@
       keep.add(key);
       let m = store.get(key);
       if (!m) {
-        m = new maplibregl.Marker({ element: makeEl() }).setLngLat(posOf(item))
-          .setPopup(new maplibregl.Popup({ offset: 14, maxWidth: "280px" })).addTo(map);
+        m = new maplibregl.Marker({ element: makeEl() }).setLngLat(posOf(item)).addTo(map);
+        bindPopup(m, m.getElement());
         store.set(key, m);
       }
-      m.getPopup().setHTML(update(m.getElement(), item));
+      m.getElement()._html = update(m.getElement(), item);
     }
     for (const [key, m] of store) if (!keep.has(key)) { m.remove(); store.delete(key); }
   }
@@ -464,7 +500,11 @@
     lastFrame = nowMs;
     for (const [id, m] of droneMotion) {
       const marker = droneMarkers.get(id);
-      if (marker) marker.setLngLat(motionPos(m, nowMs));
+      if (marker) {
+        const pos = motionPos(m, nowMs);
+        marker.setLngLat(pos);
+        if (popupOwner === marker) popup.setLngLat(pos);   // окно едет вместе с целью
+      }
     }
   }
   requestAnimationFrame(animateDrones);
@@ -476,8 +516,8 @@
       el.className = "drone";
       el.type = "button";
       el.innerHTML = `<i class="scope" aria-hidden="true"></i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 18-8-4.5L4 20z"/></svg><b class="dot" aria-hidden="true">?</b><span></span>`;
-      m = new maplibregl.Marker({ element: el, rotationAlignment: "map" }).setLngLat(pos)
-        .setPopup(new maplibregl.Popup({ offset: 14, maxWidth: "280px" })).addTo(map);
+      m = new maplibregl.Marker({ element: el, rotationAlignment: "map" }).setLngLat(pos).addTo(map);
+      bindPopup(m, el);
       droneMarkers.set(tr.id, m);
     }
     m.setLngLat(pos);
@@ -490,24 +530,25 @@
     el.style.opacity = (now - tr.points[tr.points.length - 1].t) > 18 * 60 ? "0.55" : "1";
     el.classList.toggle("engaged", !!tr.engaged);
     el.querySelector("span").textContent = tr.count > 1 ? `×${tr.count}` : "";
-    m.getPopup().setHTML(trackPopup(tr, now));
+    el._html = trackPopup(tr, now);
   }
 
   function trackPopup(tr, now) {
     const last = tr.points[tr.points.length - 1];
     const pr = tr.prediction;
-    let html = `<b>Цель #${tr.id}${tr.count > 1 ? ` · ${tr.count} БПЛА` : ""}</b><br>`;
-    if (tr.engaged) html += `<span style="color:${COLORS.missile}">Работает ПВО</span><br>`;
-    if (!pr) html += `<span class="sub">Одна фиксация: курс неизвестен, маршрут появится со второй точки</span><br>`;
-    html += `Последняя фиксация: ${esc(last.place)}${last.district_name && last.district_name !== last.place ? ` (${esc(last.district_name)})` : ""}, ${ago(last.t, now)}<br>`;
-    html += `Точек: ${tr.points.length} · источники: ${channelLinks([...new Set(tr.points.flatMap((p) => p.sources))])}`;
-    if (pr) {
-      html += `<br>Курс ${pr.bearing}°, ~${pr.speed} км/ч (${BASIS[pr.basis]})`;
-      if (tr.target) html += `<br>Заявленная цель: ${esc(tr.target)}`;
-      if (pr.districts_eta && pr.districts_eta.length) html += `<br>Ближайшие районы: ${pr.districts_eta.slice(0, 3).map((r) => `${esc(r.name)} ${eta(r.eta_min)}`).join(", ")}`;
-      if (pr.regions_eta.length) html += `<br>Может войти: ${pr.regions_eta.slice(0, 3).map((r) => `${esc(r.name)} ${eta(r.eta_min)}`).join(", ")}`;
+    const where = `${esc(last.place)}${last.district_name && last.district_name !== last.place ? ` (${esc(last.district_name)})` : ""}`;
+    let html = `<div class="pop-title">Цель #${tr.id}${tr.count > 1 ? ` · ${tr.count} БПЛА` : ""}`
+      + `${tr.engaged ? `<span class="pop-badge missile">Работает ПВО</span>` : ""}</div>`;
+    html += `<div class="pop-row">Последняя фиксация: <b>${where}</b><div class="sub">${ago(last.t, now)}</div></div>`;
+    if (!pr) {
+      html += `<div class="pop-sub">Одна фиксация: курс неизвестен, маршрут появится со второй точки.</div>`;
+    } else {
+      html += `<div class="pop-row">Курс ${pr.bearing}° · ~${pr.speed} км/ч <span class="sub">(${BASIS[pr.basis]})</span></div>`;
+      if (tr.target) html += `<div class="pop-row">Заявленная цель: <b>${esc(tr.target)}</b></div>`;
+      const next = (pr.districts_eta || []).slice(0, 2).concat(pr.regions_eta.slice(0, 2));
+      if (next.length) html += `<div class="pop-row">Дальше: ${next.map((r) => `${esc(r.name)} ${eta(r.eta_min)}`).join(", ")}</div>`;
     }
-    return html;
+    return html + srcLine([...new Set(tr.points.flatMap((p) => p.sources))]);
   }
 
   // Подробная карта по коду доступа; без кода — только тревоги по областям и районам

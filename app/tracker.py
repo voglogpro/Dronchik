@@ -45,6 +45,11 @@ def turn_penalty(turn: float, n_points: int = 3) -> float:
     return base if n_points >= 3 else base * SHORT_TRACK_FACTOR
 
 
+# Поток дронов вдоль одного коридора: цель с известным курсом и скоростью за время между сообщениями ушла бы вперёд;
+# фиксация у места, где она уже была, — следующий дрон. Это отделяет «Суджа → Льгов → Орёл» из нескольких целей.
+LAG_AFTER_MIN = 8.0         # правило действует, если с последней фиксации прошло больше стольких минут
+LAG_FRACTION = 0.35         # новая точка ближе этой доли ожидаемого пути от последней — «позади»
+LAG_MIN_TRAVEL_KM = 25.0    # ... и ожидаемый путь не меньше (иначе цель могла просто стоять)
 REVERSAL_DEG = 110.0
 REVERSAL_MIN_KM = 12.0
 REVISIT_KM = 8.0            # «то же место, что одна из прошлых точек трека»
@@ -294,7 +299,7 @@ class Tracker:
             d_last = haversine_km(tr.last.lat, tr.last.lon, place.lat, place.lon)
             if d_last > gate:
                 continue
-            if self._behind(tr, place):
+            if self._behind(tr, place, t):
                 continue
             plat, plon = tr.position_at(t)
             d_pred = haversine_km(plat, plon, place.lat, place.lon)
@@ -311,8 +316,8 @@ class Tracker:
         return best
 
     @staticmethod
-    def _behind(tr: Track, place: Place) -> bool:
-        """Новая фиксация позади цели: возврат в пройденную точку или разворот >110° у трека с курсом."""
+    def _behind(tr: Track, place: Place, t: float) -> bool:
+        """Новая фиксация позади цели: возврат в пройденную точку, разворот >110° или «отстала» от цели с курсом."""
         if len(tr.points) < 2:
             return False
         last = tr.last
@@ -320,10 +325,15 @@ class Tracker:
             if haversine_km(p.lat, p.lon, place.lat, place.lon) <= REVISIT_KM \
                     and haversine_km(p.lat, p.lon, last.lat, last.lon) >= LEFT_BEHIND_KM:
                 return True
-        bearing, _, basis = tr.motion()
+        bearing, speed, basis = tr.motion()
         d_last = haversine_km(last.lat, last.lon, place.lat, place.lon)
-        if basis == "observed" and bearing is not None and d_last > REVERSAL_MIN_KM:
-            return angle_diff(bearing, bearing_deg(last.lat, last.lon, place.lat, place.lon)) > REVERSAL_DEG
+        if basis == "observed" and bearing is not None:
+            dt_min = (t - last.t) / 60
+            expected = speed * dt_min / 60
+            if dt_min > LAG_AFTER_MIN and expected > LAG_MIN_TRAVEL_KM and d_last < LAG_FRACTION * expected:
+                return True
+            if d_last > REVERSAL_MIN_KM:
+                return angle_diff(bearing, bearing_deg(last.lat, last.lon, place.lat, place.lon)) > REVERSAL_DEG
         return False
 
     def active(self, t: float) -> list[Track]:

@@ -243,3 +243,16 @@ def test_destroyed_track_ends_at_shootdown_and_disappears(gaz):
     # через 12 минут после сбития исчезают и путь, и отметка
     later = e.snapshot(T0 + 35 * 60 + 13 * 60)
     assert later["tracks"] == [] and later["shootdowns"] == []
+
+
+def test_new_fixation_behind_a_moving_drone_is_another_drone(gaz):
+    """Поток вдоль коридора: цель с курсом за 25 минут ушла бы вперёд, а фиксация снова у Льгова — следующий дрон."""
+    tr = Tracker(gaz)
+    p = {pl.name: pl for pl in gaz.places}
+    a = tr.add_sighting(p["Рыльск"], T0, "ch1")
+    assert tr.add_sighting(p["Льгов"], T0 + 20 * 60, "ch1") is a
+    behind = tr.add_sighting(p["Льгов"], T0 + 50 * 60, "ch2")   # через 30 минут дрон ушёл бы далеко на восток
+    assert behind is not a
+    # а фиксация там, где дрон и должен быть (по курсу, дальше на восток), продолжает тот же трек
+    ahead = tr.add_sighting(p["Курчатов"], T0 + 38 * 60, "ch3")
+    assert ahead is a
