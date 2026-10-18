@@ -31,6 +31,12 @@ DUPLICATE_WINDOW_S = 6 * 60
 NEAR_KM = 40.0              # «сбитие / работа ПВО над X» относим к цели не дальше этого
 TRACK_TTL_S = 30 * 60       # без новых фиксаций трек считается потерянным
 SPEED_WINDOW_S = 40 * 60
+# Поток дронов один за другим над одним городом: новая фиксация в уже пройденном месте или «позади»
+# цели — это следующий дрон, а не разворот первого (иначе трек рисует зигзаги и курс «назад»).
+REVERSAL_DEG = 110.0
+REVERSAL_MIN_KM = 12.0
+REVISIT_KM = 8.0            # «то же место, что одна из прошлых точек трека»
+LEFT_BEHIND_KM = 20.0       # ... если цель с тех пор улетела дальше этого
 PREDICT_MINUTES = 60
 HINT_PREDICT_MINUTES = 20
 PREDICT_STEP_MIN = 5
@@ -270,6 +276,8 @@ class Tracker:
             d_last = haversine_km(tr.last.lat, tr.last.lon, place.lat, place.lon)
             if d_last > gate:
                 continue
+            if self._behind(tr, place):
+                continue
             plat, plon = tr.position_at(t)
             d_pred = haversine_km(plat, plon, place.lat, place.lon)
             cost = min(d_pred, d_last * 1.3) / gate
@@ -283,6 +291,22 @@ class Tracker:
             if cost < best_cost:
                 best, best_cost = tr, cost
         return best
+
+    @staticmethod
+    def _behind(tr: Track, place: Place) -> bool:
+        """Новая фиксация позади цели: возврат в пройденную точку или разворот >110° у трека с курсом."""
+        if len(tr.points) < 2:
+            return False
+        last = tr.last
+        for p in tr.points[:-1]:
+            if haversine_km(p.lat, p.lon, place.lat, place.lon) <= REVISIT_KM \
+                    and haversine_km(p.lat, p.lon, last.lat, last.lon) >= LEFT_BEHIND_KM:
+                return True
+        bearing, _, basis = tr.motion()
+        d_last = haversine_km(last.lat, last.lon, place.lat, place.lon)
+        if basis == "observed" and bearing is not None and d_last > REVERSAL_MIN_KM:
+            return angle_diff(bearing, bearing_deg(last.lat, last.lon, place.lat, place.lon)) > REVERSAL_DEG
+        return False
 
     def active(self, t: float) -> list[Track]:
         return [tr for tr in self.tracks if tr.status == "active" and t - tr.last.t <= TRACK_TTL_S]

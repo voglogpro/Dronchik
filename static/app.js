@@ -169,8 +169,11 @@
     map.addSource("observed", { type: "geojson", data: empty() });
     map.addSource("fixes", { type: "geojson", data: empty() });
 
-    map.addLayer({ id: "cones", type: "fill", source: "cones", paint: { "fill-color": COLORS.predicted, "fill-opacity": 0.13 } });
-    map.addLayer({ id: "cones-edge", type: "line", source: "cones", paint: { "line-color": COLORS.predicted, "line-width": 1, "line-opacity": 0.35 } });
+    // конусы неопределённости — только при приближении: при налёте на весь регион они сливаются в пятно
+    map.addLayer({ id: "cones", type: "fill", source: "cones", paint: { "fill-color": COLORS.predicted,
+      "fill-opacity": ["interpolate", ["linear"], ["zoom"], 5.5, 0, 7, 0.13] } });
+    map.addLayer({ id: "cones-edge", type: "line", source: "cones", paint: { "line-color": COLORS.predicted, "line-width": 1,
+      "line-opacity": ["interpolate", ["linear"], ["zoom"], 5.5, 0, 7, 0.35] } });
     map.addLayer({
       id: "predicted", type: "line", source: "predicted",
       paint: { "line-color": COLORS.predicted, "line-width": 2.5, "line-dasharray": [2, 1.5] },
@@ -203,6 +206,11 @@
 
     if (cfg.timelineUrl) playTimeline(cfg.timelineUrl); else connect();
   });
+
+  // порог, с которого значки опасности показываются по районам
+  const zoomFine = () => map.getContainer().classList.toggle("z-fine", map.getZoom() >= 6.3);
+  map.on("zoom", zoomFine);
+  map.on("load", zoomFine);
 
   function statusHtml(info) {
     if (!info) return `<span style="color:#3dd68c">Угроз не зафиксировано</span>`;
@@ -318,12 +326,30 @@
       const [[la1, lo1], [la2, lo2]] = v.path;
       return [lo1 + (lo2 - lo1) * 0.8, la1 + (la2 - la1) * 0.8];
     });
-    syncMarkers(alertMarkers, state.alert_marks || [], (a) => a.district || a.region, alertMarkEl, (el, a) => {
+    // На мелком масштабе районы одной области сливаются в один значок «!» (с ростом масштаба — по районам)
+    const marks = (state.alert_marks || []).map((m) => ({ ...m }));
+    const inRegion = {};
+    for (const m of marks) if (m.district) (inRegion[m.region] ||= []).push(m);
+    const aggs = [];
+    for (const [rid, list] of Object.entries(inRegion)) {
+      if (list.length < 2) continue;
+      list.forEach((m) => { m.fine = true; });
+      aggs.push({
+        agg: true, region: rid, district: null, name: regionNames[rid] || rid, count: list.length,
+        level: list.some((m) => m.level === "missile") ? "missile" : "uav",
+        lat: list.reduce((s, m) => s + m.lat, 0) / list.length, lon: list.reduce((s, m) => s + m.lon, 0) / list.length,
+        channels: [...new Set(list.flatMap((m) => m.channels))], updated: Math.max(...list.map((m) => m.updated)),
+      });
+    }
+    syncMarkers(alertMarkers, [...marks, ...aggs], (a) => (a.agg ? `agg/${a.region}` : a.district || a.region), alertMarkEl, (el, a) => {
       // className не перезаписываем: MapLibre держит на элементе свой класс позиционирования
       el.classList.toggle("missile", a.level === "missile");
       el.classList.toggle("uav", a.level !== "missile");
+      el.classList.toggle("agg", !!a.agg);
+      el.classList.toggle("fine", !!a.fine);
       el.setAttribute("aria-label", `${LABELS[a.level]}: ${a.name}`);
       return `<b>${esc(a.name)}</b><br><span style="color:${COLORS[a.level]}">${LABELS[a.level]}</span>`
+        + (a.agg ? `<br><span class="sub">Районов с опасностью: ${a.count}. Приблизьте карту — они покажутся по отдельности.</span>` : "")
         + `<br><span class="sub">${state.mode === "public" ? "Сообщение канала" : "Цель не зафиксирована"}, обновлено ${ago(a.updated, state.now)}</span>`
         + (a.channels.length ? `<br><span class="sub">Источник: ${channelLinks(a.channels)}</span>` : "");
     });

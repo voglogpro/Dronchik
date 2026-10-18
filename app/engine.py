@@ -18,6 +18,8 @@ DISTRICT_PREDICT_WARN_MINUTES = 30  # для районов горизонт к�
 SHOOTDOWN_SHOW_S = 40 * 60       # сколько показывать отметку сбития
 FORECAST_SHOW_S = 14 * 3600      # «прогноз на ночь» актуален до утра
 ENGAGED_SHOW_S = 10 * 60         # «под прицелом ПВО» — пока свежие сообщения о работе ПВО
+OLD_TRACK_SHOW_S = 40 * 60       # потерянные и сбитые цели остаются на карте столько после последней фиксации
+LONE_TRACK_SHOW_S = 15 * 60      # одна фиксация без второй точки: курса нет, держим недолго
 
 @dataclass
 class RegionAlert:
@@ -203,6 +205,12 @@ class Engine:
         }
         tracks = []
         for tr in self.tracker.tracks:
+            age = now - tr.last.t
+            alive = tr.status == "active" and age <= TRACK_TTL_S
+            if len(tr.points) == 1 and age > LONE_TRACK_SHOW_S:
+                continue
+            if not alive and age > OLD_TRACK_SHOW_S:
+                continue
             item = {
                 "id": tr.id,
                 "status": tr.status if tr.status != "active" or now - tr.last.t <= TRACK_TTL_S else "lost",

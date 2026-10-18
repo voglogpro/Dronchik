@@ -199,3 +199,19 @@ def test_drone_turns_to_region_with_new_alert(gaz):
     # новая фиксация отменяет поворот
     engine.process("radar", "БПЛА над Ельцом", t0 + 40 * 60)
     assert engine.tracker.predict(track, t0 + 41 * 60).basis == "observed"
+
+
+def test_stream_of_drones_is_not_one_zigzag_track(gaz):
+    """Дрон за дроном над одним городом: первый улетел дальше, второй — новая цель, а не разворот первого."""
+    tr = Tracker(gaz)
+    p = {pl.name: pl for pl in gaz.places}
+    a = tr.add_sighting(p["Курск"], T0, "ch1")
+    assert tr.add_sighting(p["Курчатов"], T0 + 25 * 60, "ch1") is a       # первый дрон летит на запад-северо-запад
+    b = tr.add_sighting(p["Курск"], T0 + 40 * 60, "ch1")                   # снова над Курском — второй дрон
+    assert b is not a and [pt.place for pt in a.points] == ["Курск", "Курчатов"]
+    # и третий — после второго, который тоже ушёл вперёд
+    assert tr.add_sighting(p["Курчатов"], T0 + 62 * 60, "ch1") is b
+    c = tr.add_sighting(p["Курск"], T0 + 75 * 60, "ch1")
+    assert c not in (a, b)
+    # обычное движение вперёд склеивается, как раньше
+    assert tr.add_sighting(p["Рыльск"], T0 + 95 * 60, "ch2") is not None

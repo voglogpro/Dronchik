@@ -321,3 +321,6 @@ hr.sep { border: 0; border-top: 1px solid var(--panel-border); margin: 8px 0; }
 .btn.primary:disabled { opacity: .4; cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) { .consent-check .box { transition: none; } }
 
+
+/* значки «!» на мелком масштабе: один на область; по районам — с приближением */
+#map:not(.z-fine) .alert-mark.fine, #map.z-fine .alert-mark.agg { display: none; }
