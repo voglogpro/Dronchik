@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+websockets>=12
+shapely>=2.0
+telethon>=1.36

@@ -1,0 +1,256 @@
+"""Сведение отдельных фиксаций БПЛА в треки и прогноз вероятного маршрута.
+
+Идея: каждая фиксация («БПЛА над Курчатовым») — точка со временем. Новую точку
+пристёгиваем к уже существующему треку, если она достижима из его последней
+(или экстраполированной) позиции с правдоподобной скоростью. По двум и более
+точкам считаем курс и скорость и строим прогноз на PREDICT_MINUTES вперёд
+с конусом неопределённости. Если в сообщении был явный курс («курсом на Курск»),
+прогноз строится к этой цели.
+"""
+from __future__ import annotations
+
+import itertools
+import math
+from dataclasses import dataclass, field
+
+from shapely.geometry import LineString, Point, Polygon
+from shapely.ops import nearest_points
+
+from .gazetteer import Gazetteer, Place
+from .geo import angle_diff, bearing_deg, destination, haversine_km
+
+DEFAULT_SPEED_KMH = 150.0   # типичная крейсерская скорость ударного БПЛА самолётного типа
+MIN_SPEED_KMH = 60.0
+MAX_SPEED_KMH = 220.0
+GATE_BASE_KM = 35.0         # погрешность «в районе города»
+DUPLICATE_KM = 8.0          # та же точка от разных каналов
+DUPLICATE_WINDOW_S = 6 * 60
+TRACK_TTL_S = 45 * 60       # без новых фиксаций трек считается потерянным
+SPEED_WINDOW_S = 40 * 60
+PREDICT_MINUTES = 60
+PREDICT_STEP_MIN = 5
+
+
+@dataclass
+class TrackPoint:
+    lat: float
+    lon: float
+    t: float
+    place: str
+    region_id: str
+    sources: set[str] = field(default_factory=set)
+    count: int = 1
+
+
+@dataclass
+class Track:
+    id: int
+    points: list[TrackPoint]
+    target: Place | None = None
+    bearing_hint: float | None = None
+    status: str = "active"  # active | destroyed | lost
+    count: int = 1
+
+    @property
+    def last(self) -> TrackPoint:
+        return self.points[-1]
+
+    def motion(self) -> tuple[float | None, float, str]:
+        """(курс, скорость км/ч, на чём основан курс: target | observed | hint | none)."""
+        last = self.last
+        speed = DEFAULT_SPEED_KMH
+        observed_bearing = None
+        window = [p for p in self.points if last.t - p.t <= SPEED_WINDOW_S]
+        first = window[0]
+        dist = haversine_km(first.lat, first.lon, last.lat, last.lon)
+        dt_h = (last.t - first.t) / 3600
+        if dist > 5:
+            observed_bearing = bearing_deg(first.lat, first.lon, last.lat, last.lon)
+            # слишком близкие по времени сообщения дают нереалистичную скорость
+            if dt_h > 4 / 60:
+                speed = min(max(dist / dt_h, MIN_SPEED_KMH), MAX_SPEED_KMH)
+        if self.target and haversine_km(last.lat, last.lon, self.target.lat, self.target.lon) > 5:
+            return bearing_deg(last.lat, last.lon, self.target.lat, self.target.lon), speed, "target"
+        if observed_bearing is not None:
+            return observed_bearing, speed, "observed"
+        if self.bearing_hint is not None:
+            return self.bearing_hint, speed, "hint"
+        return None, speed, "none"
+
+    def position_at(self, t: float) -> tuple[float, float]:
+        bearing, speed, _ = self.motion()
+        if bearing is None or t <= self.last.t:
+            return self.last.lat, self.last.lon
+        dist = speed * (t - self.last.t) / 3600
+        if self.target:
+            to_target = haversine_km(self.last.lat, self.last.lon, self.target.lat, self.target.lon)
+            dist = min(dist, to_target)
+        return destination(self.last.lat, self.last.lon, bearing, dist)
+
+
+@dataclass
+class Prediction:
+    path: list[tuple[float, float]]           # (lat, lon) каждые PREDICT_STEP_MIN минут
+    cone: list[tuple[float, float]]
+    bearing: float
+    speed: float
+    basis: str
+    regions_eta: dict[str, int]               # регион -> минут до входа (по прогнозу)
+
+
+class Tracker:
+    def __init__(self, gazetteer: Gazetteer):
+        self.gaz = gazetteer
+        self.tracks: list[Track] = []
+        self._ids = itertools.count(1)
+
+    # ---- приём событий ----
+
+    def add_sighting(self, place: Place, t: float, source: str, count: int = 1,
+                     target: Place | None = None, bearing: float | None = None) -> Track:
+        self.expire(t)
+        track = self._duplicate_of(place, t)
+        if track:
+            p = track.last if haversine_km(track.last.lat, track.last.lon, place.lat, place.lon) <= DUPLICATE_KM \
+                else min(track.points, key=lambda p: haversine_km(p.lat, p.lon, place.lat, place.lon))
+            p.sources.add(source)
+            p.count = max(p.count, count)
+        else:
+            track = self._associate(place, t, target, bearing)
+            point = TrackPoint(place.lat, place.lon, t, place.name, place.region_id, {source}, count)
+            if track is None:
+                track = Track(next(self._ids), [point])
+                self.tracks.append(track)
+            else:
+                # сообщения могут приходить не по порядку — держим точки отсортированными
+                track.points.append(point)
+                track.points.sort(key=lambda p: p.t)
+                if track.target and haversine_km(place.lat, place.lon, track.target.lat, track.target.lon) <= DUPLICATE_KM:
+                    track.target = None  # цель достигнута, дальше — по наблюдаемому курсу
+        if target and haversine_km(place.lat, place.lon, target.lat, target.lon) > DUPLICATE_KM:
+            track.target = target
+        if bearing is not None:
+            track.bearing_hint = bearing
+        track.count = max(track.count, count)
+        return track
+
+    def add_heading(self, region_ids: list[str], target: Place, t: float) -> Track | None:
+        """Курс без точки: применяем к самому свежему треку в этом регионе."""
+        candidates = [tr for tr in self.active(t) if tr.last.region_id in region_ids]
+        if not candidates:
+            return None
+        track = max(candidates, key=lambda tr: tr.last.t)
+        track.target = target
+        return track
+
+    def mark_destroyed(self, place: Place, t: float) -> Track | None:
+        candidates = []
+        for tr in self.active(t):
+            lat, lon = tr.position_at(t)
+            d = haversine_km(lat, lon, place.lat, place.lon)
+            if d <= GATE_BASE_KM * 1.5:
+                candidates.append((d, tr))
+        if not candidates:
+            return None
+        _, track = min(candidates, key=lambda x: x[0])
+        track.count -= 1
+        if track.count <= 0:
+            track.status = "destroyed"
+        return track
+
+    def clear_regions(self, region_ids: list[str], t: float) -> None:
+        """Отбой в регионе: треки, последние точки которых там, считаем завершёнными."""
+        for tr in self.active(t):
+            if tr.last.region_id in region_ids and t >= tr.last.t:
+                tr.status = "lost"
+
+    # ---- сопоставление ----
+
+    def _duplicate_of(self, place: Place, t: float) -> Track | None:
+        for tr in self.active(t):
+            for p in reversed(tr.points):
+                if abs(t - p.t) <= DUPLICATE_WINDOW_S and haversine_km(p.lat, p.lon, place.lat, place.lon) <= DUPLICATE_KM:
+                    return tr
+        return None
+
+    def _associate(self, place: Place, t: float, target: Place | None, bearing: float | None) -> Track | None:
+        best, best_cost = None, 1.0
+        for tr in self.active(t):
+            dt_h = max(t - tr.last.t, 0) / 3600
+            gate = GATE_BASE_KM + MAX_SPEED_KMH * dt_h
+            d_last = haversine_km(tr.last.lat, tr.last.lon, place.lat, place.lon)
+            if d_last > gate:
+                continue
+            plat, plon = tr.position_at(t)
+            d_pred = haversine_km(plat, plon, place.lat, place.lon)
+            cost = min(d_pred, d_last * 1.3) / gate
+            tr_bearing, _, basis = tr.motion()
+            if tr_bearing is not None and d_last > 10:
+                turn = angle_diff(tr_bearing, bearing_deg(tr.last.lat, tr.last.lon, place.lat, place.lon))
+                cost += 0.6 * max(turn - 60, 0) / 120  # резкий разворот маловероятен
+            if target and tr.target and tr.target.name == target.name:
+                cost *= 0.6
+            if cost < best_cost:
+                best, best_cost = tr, cost
+        return best
+
+    def active(self, t: float) -> list[Track]:
+        return [tr for tr in self.tracks if tr.status == "active" and t - tr.last.t <= TRACK_TTL_S]
+
+    def expire(self, t: float, keep_s: float = 3 * 3600) -> None:
+        for tr in self.tracks:
+            if tr.status == "active" and t - tr.last.t > TRACK_TTL_S:
+                tr.status = "lost"
+        self.tracks = [tr for tr in self.tracks if t - tr.last.t <= keep_s]
+
+    # ---- прогноз ----
+
+    def predict(self, track: Track, now: float) -> Prediction | None:
+        bearing, speed, basis = track.motion()
+        if bearing is None:
+            return None
+        start_lat, start_lon = track.position_at(now)
+        elapsed_min = max(now - track.last.t, 0) / 60
+        horizon = max(PREDICT_MINUTES - elapsed_min, PREDICT_STEP_MIN)
+        max_dist = speed * horizon / 60
+        if track.target:
+            max_dist = min(max_dist, haversine_km(start_lat, start_lon, track.target.lat, track.target.lon) + 15)
+        steps = max(int(horizon // PREDICT_STEP_MIN), 1)
+        path = [(start_lat, start_lon)]
+        for i in range(1, steps + 1):
+            dist = min(speed * i * PREDICT_STEP_MIN / 60, max_dist)
+            path.append(destination(start_lat, start_lon, bearing, dist))
+            if dist >= max_dist:
+                break
+
+        half_angle = {"target": 10.0, "observed": 20.0, "hint": 30.0}[basis]
+        if basis == "observed" and len(track.points) >= 3:
+            half_angle = 15.0
+        cone_left, cone_right = [], []
+        for lat, lon in path[1:]:
+            d = haversine_km(start_lat, start_lon, lat, lon)
+            spread = d * math.tan(math.radians(half_angle)) + 10
+            cone_left.append(destination(lat, lon, bearing - 90, spread))
+            cone_right.append(destination(lat, lon, bearing + 90, spread))
+        cone = [(start_lat, start_lon), *cone_left, *reversed(cone_right), (start_lat, start_lon)]
+
+        regions_eta = self._regions_eta(track, path, cone, speed)
+        return Prediction(path, cone, bearing, speed, basis, regions_eta)
+
+    def _regions_eta(self, track: Track, path, cone, speed: float) -> dict[str, int]:
+        """Регионы, в которые заходит конус прогноза, и минуты до ближайшей точки входа."""
+        start_lat, start_lon = path[0]
+        start = Point(start_lon, start_lat)
+        current = {track.last.region_id, self.gaz.region_at(start_lat, start_lon)}
+        zone_geom = Polygon([(lon, lat) for lat, lon in cone]) if len(cone) >= 4 \
+            else LineString([(lon, lat) for lat, lon in path])
+        out: dict[str, int] = {}
+        for region in self.gaz.regions.values():
+            if region.id in current or not region.geometry.intersects(zone_geom):
+                continue
+            zone = region.geometry.intersection(zone_geom)
+            if zone.is_empty:
+                continue
+            nearest = nearest_points(zone, start)[0]
+            out[region.id] = int(round(haversine_km(start_lat, start_lon, nearest.y, nearest.x) / speed * 60))
+        return dict(sorted(out.items(), key=lambda x: x[1]))

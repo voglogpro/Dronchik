@@ -1,0 +1,139 @@
+import pytest
+
+from app.engine import Engine
+from app.gazetteer import Gazetteer
+from app.parser import CLEAR, DESTROYED, HEADING, MISSILE_ALERT, SIGHTING, UAV_ALERT, MessageParser
+from app.tracker import Tracker
+
+T0 = 1_760_000_000.0
+
+
+@pytest.fixture(scope="module")
+def gaz():
+    return Gazetteer()
+
+
+@pytest.fixture(scope="module")
+def parser(gaz):
+    return MessageParser(gaz)
+
+
+def kinds(events):
+    return [e.kind for e in events]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("БПЛА над Курчатовым курсом на Курск", [("Курчатов", "city"), ("Курск", "city")]),
+    ("Угроза атаки БПЛА в Курской области", [("Курская область", "region")]),
+    ("В Старом Осколе и Белгороде", [("Старый Оскол", "city"), ("Белгород", "city")]),
+    ("Брянщина: в районе Трубчевска", [("Брянская область", "region"), ("Трубчевск", "city")]),
+    ("над Москвой и Подмосковьем", [("Москва", "city"), ("Московская область", "region")]),
+    ("в районе Ельца и Орла", [("Елец", "city"), ("Орёл", "city")]),
+    ("кому нужна Республика Коми", [("Республика Коми", "region")]),
+])
+def test_gazetteer_declensions(gaz, text, expected):
+    assert [(m.place.name, m.place.kind) for m in gaz.find(text)] == expected
+
+
+def test_region_lookup_by_point(gaz):
+    assert gaz.region_at(51.73, 36.19) == "kursk-oblast"
+    assert gaz.region_at(55.75, 37.62) == "moscow"
+
+
+def test_parse_alerts_and_clear(parser):
+    assert kinds(parser.parse("⚠️ Угроза атаки БПЛА в Курской области")) == [UAV_ALERT]
+    assert kinds(parser.parse("Ракетная опасность! Белгород")) == [MISSILE_ALERT]
+    ev = parser.parse("Отбой угрозы БПЛА по Белгородской области")
+    assert kinds(ev) == [CLEAR] and ev[0].region_ids == ["belgorod-oblast"]
+    assert parser.parse("Воронеж — режим беспилотной опасности снят")[0].kind == CLEAR
+
+
+def test_parse_sighting_with_target_and_count(parser):
+    ev = parser.parse("🛵 2 БПЛА над Курчатовым курсом на Курск")
+    assert kinds(ev) == [SIGHTING]
+    assert ev[0].place.name == "Курчатов" and ev[0].target.name == "Курск" and ev[0].count == 2
+
+
+def test_parse_arrow_and_direction(parser):
+    ev = parser.parse("🛵 Рыльск → Льгов")
+    assert ev[0].place.name == "Рыльск" and ev[0].target.name == "Льгов"
+    ev = parser.parse("Группа БПЛА движется на юг от Липецка")
+    assert ev[0].bearing == 180 and ev[0].count == 2
+
+
+def test_parse_multiline_context(parser):
+    ev = parser.parse("Белгородская область:\nБПЛА в районе Шебекино\nЕщё один в сторону Корочи")
+    assert kinds(ev) == [SIGHTING, HEADING]
+    assert ev[1].target.name == "Короча" and ev[1].region_ids == ["belgorod-oblast"]
+
+
+def test_parse_default_region_for_channel(parser):
+    ev = parser.parse("Отбой беспилотной опасности", default_region="voronezh-oblast")
+    assert ev[0].kind == CLEAR and ev[0].region_ids == ["voronezh-oblast"]
+
+
+def test_parse_destroyed(parser):
+    assert kinds(parser.parse("В районе Ельца сбит БПЛА")) == [DESTROYED]
+
+
+def test_tracker_builds_route_and_prediction(gaz):
+    tr = Tracker(gaz)
+    p = {pl.name: pl for pl in gaz.places}
+    a = tr.add_sighting(p["Трубчевск"], T0, "ch1")
+    b = tr.add_sighting(p["Трубчевск"], T0 + 60, "ch2")  # дубль из другого канала
+    assert a is b and a.points[0].sources == {"ch1", "ch2"}
+    c = tr.add_sighting(p["Брянск"], T0 + 30 * 60, "ch1")
+    assert c is a and [pt.place for pt in a.points] == ["Трубчевск", "Брянск"]
+
+    pred = tr.predict(a, T0 + 31 * 60)
+    assert pred.basis == "observed"
+    assert 0 <= pred.bearing <= 60  # на север-северо-восток
+    assert "kaluga-oblast" in pred.regions_eta
+
+
+def test_tracker_separates_far_sightings(gaz):
+    tr = Tracker(gaz)
+    p = {pl.name: pl for pl in gaz.places}
+    a = tr.add_sighting(p["Брянск"], T0, "ch")
+    b = tr.add_sighting(p["Краснодар"], T0 + 5 * 60, "ch")
+    assert a is not b
+
+
+def test_tracker_target_prediction_ends_at_target(gaz):
+    tr = Tracker(gaz)
+    p = {pl.name: pl for pl in gaz.places}
+    t = tr.add_sighting(p["Курчатов"], T0, "ch", target=p["Курск"])
+    pred = tr.predict(t, T0)
+    assert pred.basis == "target"
+    end_lat, end_lon = pred.path[-1]
+    assert abs(end_lat - p["Курск"].lat) < 0.3 and abs(end_lon - p["Курск"].lon) < 0.3
+
+
+def test_engine_flow(gaz):
+    e = Engine(gaz)
+    e.process("a", "⚠️ Угроза атаки БПЛА в Брянской области", T0)
+    e.process("a", "🛵 БПЛА в районе Трубчевска", T0 + 60)
+    e.process("a", "🛵 БПЛА над Брянском", T0 + 25 * 60)
+    snap = e.snapshot(T0 + 26 * 60)
+    assert snap["regions"]["bryansk-oblast"]["status"] == "uav"
+    assert any(r["status"] == "predicted" for r in snap["regions"].values())
+    assert len([t for t in snap["tracks"] if t["status"] == "active"]) == 1
+
+    e.process("a", "✅ Отбой угрозы БПЛА по Брянской области", T0 + 40 * 60)
+    snap = e.snapshot(T0 + 41 * 60)
+    assert "bryansk-oblast" not in snap["regions"]
+    assert not [t for t in snap["tracks"] if t["status"] == "active"]
+
+
+def test_engine_alert_expires(gaz):
+    e = Engine(gaz)
+    e.process("a", "Угроза атаки БПЛА в Курской области", T0)
+    assert "kursk-oblast" in e.snapshot(T0 + 3600)["regions"]
+    assert "kursk-oblast" not in e.snapshot(T0 + 3 * 3600)["regions"]
+
+
+def test_old_clear_does_not_cancel_newer_alert(gaz):
+    e = Engine(gaz)
+    e.process("a", "Угроза атаки БПЛА в Курской области", T0 + 600)
+    e.process("b", "Отбой по Курской области", T0)  # пришло с задержкой
+    assert "kursk-oblast" in e.snapshot(T0 + 700)["regions"]

@@ -1,0 +1,12 @@
+services:
+  dronchik:
+    build: .
+    ports: ["8000:8000"]
+    env_file: .env
+    volumes:
+      - ./channels.json:/app/channels.json:ro
+      - ./state:/app/state
+    environment:
+      DB_PATH: /app/state/dronchik.db
+      TG_SESSION: /app/state/telegram
+    restart: unless-stopped

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Дрончик — карта БПЛА</title>
+  <meta name="description" content="Карта угроз БПЛА по регионам России с приблизительными маршрутами по данным открытых каналов">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1l6 13-6-4-6 4z' fill='%23ff5a5f'/%3E%3C/svg%3E">
+</head>
+<body>
+  <div id="map"></div>
+
+  <aside id="panel" aria-label="Обстановка">
+    <header class="panel-head">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <div>
+          <h1>Дрончик</h1>
+          <p id="status-line" class="muted">Подключение…</p>
+        </div>
+      </div>
+      <button id="panel-toggle" class="icon-btn" aria-label="Свернуть панель" aria-expanded="true">▾</button>
+    </header>
+
+    <div class="panel-body">
+      <section class="summary" id="summary"></section>
+
+      <section>
+        <label class="field">
+          <span>Моя область</span>
+          <select id="my-region"><option value="">— не выбрана —</option></select>
+        </label>
+        <div id="my-region-status" class="my-status" hidden></div>
+        <button id="notify-btn" class="btn" hidden>Включить уведомления</button>
+      </section>
+
+      <section>
+        <h2>Регионы под угрозой</h2>
+        <ul id="alert-list" class="list"></ul>
+      </section>
+
+      <section>
+        <h2>Цели и прогноз маршрута</h2>
+        <ul id="track-list" class="list"></ul>
+      </section>
+
+      <section>
+        <h2>Лента сообщений</h2>
+        <ul id="feed" class="list feed"></ul>
+      </section>
+
+      <p class="disclaimer">
+        Данные собираются автоматически из открытых каналов, могут запаздывать и содержать ошибки.
+        Маршрут — вероятностная оценка, а не точное положение цели.
+        Ориентируйтесь на официальные сигналы МЧС и региональных властей.
+      </p>
+    </div>
+  </aside>
+
+  <div class="legend" aria-label="Легенда">
+    <span><i class="sw sw-missile"></i>Ракетная опасность</span>
+    <span><i class="sw sw-uav"></i>Угроза БПЛА</span>
+    <span><i class="sw sw-predicted"></i>Вероятный подлёт ≤ 60 мин</span>
+    <span><i class="ln ln-obs"></i>Пройденный путь</span>
+    <span><i class="ln ln-pred"></i>Прогноз</span>
+  </div>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
