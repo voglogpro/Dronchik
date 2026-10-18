@@ -126,6 +126,17 @@ def districts() -> FileResponse:
     return FileResponse(ROOT / "geodata" / "districts.geojson", media_type="application/geo+json")
 
 
+@app.get("/api/neighbors")
+def neighbors() -> FileResponse:
+    """Остальные области Украины — фон с границами, чтобы маршруты пусков было к чему привязать."""
+    return FileResponse(ROOT / "geodata" / "neighbors.geojson", media_type="application/geo+json")
+
+
+@app.get("/api/launch-areas")
+def launch_areas() -> list[dict]:
+    return [{"name": a.name, "lat": a.lat, "lon": a.lon} for a, _ in engine.launch_detector.areas]
+
+
 @app.get("/api/places")
 def places() -> list[dict]:
     return gazetteer.map_labels()

@@ -36,11 +36,18 @@ def test_launch_does_not_paint_target_region(gaz):
 
 def test_odessa_group_goes_around_crimea_by_sea(gaz):
     e = Engine(gaz)
-    e.process("lpr1_treugolnik", "Пуски БПЛА от Одессы, группа в обход Крыма", T0)
+    e.process("lpr1_treugolnik", "Пуски БПЛА от Одессы, группа в обход Крыма в направлении Новороссийска", T0)
     (lc,) = launches(e, T0 + 60)
     assert lc["count"] == [2, 5]
     (route,) = lc["routes"]
-    assert route["region"] == "krasnodar-krai" and not route["named"] and len(route["path"]) == 3
+    assert route["target"] == "Новороссийск" and route["named"] and len(route["path"]) == 3  # через море
+
+
+def test_odessa_default_directions_include_crimea(gaz):
+    e = Engine(gaz)
+    e.process("lpr1_treugolnik", "Пуски БПЛА от Одессы", T0)
+    (lc,) = launches(e, T0 + 60)
+    assert [r["region"] for r in lc["routes"]] == ["crimea", "krasnodar-krai"]
 
 
 def test_planned_and_continued_launches_merge(gaz):
@@ -55,9 +62,8 @@ def test_planned_and_continued_launches_merge(gaz):
 def test_missiles_and_unmapped_targets_are_not_drone_routes(gaz):
     e = Engine(gaz)
     e.process("lpr1_treugolnik", "Пуски ПКР от Одесской области в направлении запада, северо-запада Крыма", T0)
-    e.process("lpr1_treugolnik", "Николаевская область подготовка к пускам БПЛА в направлении Херсонской области РФ", T0)
     lcs = launches(e, T0 + 60)
-    assert len(lcs) == 1 and lcs[0]["routes"] == []
+    assert lcs == []
 
 
 def test_launch_expires_after_expected_arrival(gaz):

@@ -127,6 +127,9 @@ def _lines(text: str, gaz: Gazetteer) -> list[str]:
     pending: list[str] = []
     for raw in re.split(r"[\n\r]+", text):
         line = RX_LINKS.sub("", normalize(raw)).strip(" \t-—–|/•")
+        # «в обход Крыма» — как раз НЕ над Крымом; «ЛДНР» — обе республики
+        line = re.sub(r"в обход\s+(?:крым|севастопол)\w*", "", line)
+        line = re.sub(r"(?<![а-яё])лднр(?![а-яё])", "лнр, днр", line)
         if not line or RX_BOILERPLATE.search(line) or RX_ADVICE.search(line):
             continue
         # короткая строка без статуса — «шапка» с местами («Дмитровский район», «Орловская область»)

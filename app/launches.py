@@ -109,6 +109,7 @@ class LaunchDetector:
 
     def _route_places(self, norm: str) -> tuple[list[Area], list[dict]]:
         via: list[Area] = [a for a, forms in self.seas if any(rx.search(norm) for rx in forms)]
+        norm = re.sub(r"в обход\s+(?:крым|севастопол)\w*", "", norm)  # обход — не цель
         via_from = None
         m = RX_VIA.search(norm)
         if m:

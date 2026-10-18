@@ -6,6 +6,7 @@
   <title>Дрончик — карта БПЛА</title>
   <meta name="description" content="Карта угроз БПЛА по регионам России с приблизительными маршрутами по данным открытых каналов">
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="fonts.css">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1l6 13-6-4-6 4z' fill='%23ff5a5f'/%3E%3C/svg%3E">
 </head>
@@ -14,21 +15,40 @@
 
   <div id="consent" class="consent" role="dialog" aria-modal="true" aria-labelledby="consent-title" hidden>
     <form id="consent-form" class="consent-card">
-      <h2 id="consent-title">Прежде чем открыть карту</h2>
-      <p class="consent-mission">Цель проекта — своевременно информировать граждан об угрозах с воздуха
-        и помогать беречь Россию.</p>
-      <ul>
-        <li>Все данные берутся <b>только из публичных Telegram-каналов</b>:
-          <span id="consent-channels" class="consent-channels"></span>.
-          Это не официальный источник и не система оповещения, сервис не связан с МЧС и органами власти.</li>
-        <li>Данные бывают <b>неполными, ошибочными и запаздывают</b>. Маршруты и время подлёта — приблизительная оценка.
-          Отсутствие отметки не значит, что опасности нет.</li>
-        <li>При угрозе действуйте <b>по указаниям МЧС и властей</b> вашего региона.</li>
-        <li>Во многих регионах запрещено распространять сведения о БПЛА и работе ПВО. <b>Не пересылайте</b>
-          и не публикуйте данные с карты, если это запрещено там, где вы находитесь.</li>
+      <header class="consent-head">
+        <span class="logo" aria-hidden="true"></span>
+        <div>
+          <p class="consent-kicker">Дрончик · карта угроз с воздуха</p>
+          <h2 id="consent-title">Прежде чем открыть карту</h2>
+        </div>
+      </header>
+
+      <p class="consent-mission">Наша цель — вовремя предупредить людей об угрозе с воздуха и помочь беречь Россию.</p>
+
+      <ul class="consent-points">
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/></svg>
+          <div><b>Только публичные Telegram-каналы.</b> Сервис не официальный, с МЧС и органами власти не связан.
+            <details class="consent-sources"><summary>Какие каналы читаем</summary><div id="consent-channels" class="chips"></div></details>
+          </div>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/></svg>
+          <div><b>Данные могут ошибаться и опаздывать.</b> Маршруты и время подлёта — оценка. Нет отметки — не значит, что нет опасности.</div>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/></svg>
+          <div><b>При угрозе слушайте МЧС и власти</b> вашего региона — их указания главнее любой карты.</div>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M6 18L18 6"/></svg>
+          <div><b>Не пересылайте данные с карты</b>, если в вашем регионе запрещено распространять сведения о БПЛА и ПВО.</div>
+        </li>
       </ul>
+
       <label class="consent-check">
         <input type="checkbox" id="consent-accept" required>
+        <span class="box" aria-hidden="true"></span>
         <span>Мне есть 18 лет, я прочитал(а) и принимаю
           <a href="terms.html" target="_blank" rel="noopener">пользовательское соглашение</a></span>
       </label>
@@ -37,6 +57,10 @@
   </div>
 
   <div id="health-bar" class="health-bar" role="status" hidden></div>
+
+  <button type="button" id="panel-open" class="panel-open" aria-controls="panel" hidden>
+    <span class="dot" aria-hidden="true"></span><span id="panel-open-text">Обстановка</span>
+  </button>
 
   <aside id="panel" aria-label="Обстановка">
     <header class="panel-head" id="panel-head">
@@ -47,7 +71,8 @@
           <p id="status-line" class="muted">Подключение…</p>
         </div>
       </div>
-      <button id="panel-toggle" class="panel-toggle" type="button" aria-controls="panel" aria-expanded="true">Скрыть</button>
+      <button id="panel-toggle" class="panel-toggle" type="button" aria-controls="panel" aria-label="Скрыть панель">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </header>
 
     <div class="panel-body">
@@ -133,6 +158,7 @@
     <span data-layer="tracks"><i class="lg-drone"></i>Фиксация БПЛА</span>
     <span data-layer="air_defense"><i class="lg-scope"></i>Работа ПВО</span>
     <span data-layer="air_defense"><i class="lg-shoot"></i>Сбитие</span>
+    <span data-layer="launches"><i class="lg-origin"></i>Откуда обычно пуски</span>
     <span data-layer="launches"><i class="ln ln-launch"></i>Пуск и примерный маршрут</span>
     <span data-layer="tracks"><i class="ln ln-obs"></i>Пройденный путь</span>
     <span data-layer="tracks"><i class="ln ln-pred"></i>Прогноз</span>

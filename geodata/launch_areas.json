@@ -9,6 +9,7 @@
     "одесс\\w*"
    ],
    [
+    "crimea",
     "krasnodar-krai"
    ]
   ],
@@ -20,7 +21,8 @@
     "николаев\\w*"
    ],
    [
-    "krasnodar-krai"
+    "kherson-oblast",
+    "crimea"
    ]
   ],
   [
@@ -31,6 +33,7 @@
     "измаил\\w*"
    ],
    [
+    "crimea",
     "krasnodar-krai"
    ]
   ],
@@ -42,7 +45,8 @@
     "очаков\\w*"
    ],
    [
-    "krasnodar-krai"
+    "kherson-oblast",
+    "crimea"
    ]
   ],
   [
@@ -106,7 +110,7 @@
    ],
    [
     "belgorod-oblast",
-    "kursk-oblast"
+    "lnr"
    ]
   ],
   [
@@ -131,8 +135,8 @@
     "авиаторск\\w*"
    ],
    [
-    "rostov-oblast",
-    "krasnodar-krai"
+    "zaporozhye-oblast",
+    "dnr"
    ]
   ],
   [
@@ -143,8 +147,8 @@
     "запорожь\\w*"
    ],
    [
-    "rostov-oblast",
-    "krasnodar-krai"
+    "zaporozhye-oblast",
+    "crimea"
    ]
   ],
   [
@@ -156,8 +160,8 @@
     "криворож\\w*"
    ],
    [
-    "krasnodar-krai",
-    "rostov-oblast"
+    "kherson-oblast",
+    "zaporozhye-oblast"
    ]
   ],
   [
@@ -169,8 +173,8 @@
     "кировоградск\\w*"
    ],
    [
-    "krasnodar-krai",
-    "rostov-oblast"
+    "kherson-oblast",
+    "crimea"
    ]
   ],
   [

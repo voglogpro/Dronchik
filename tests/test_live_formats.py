@@ -209,3 +209,15 @@ def test_forecast_is_a_note_not_alerts(gaz, parser):
     snap = e.snapshot(T0 + 60)
     assert snap["regions"] == {} and snap["tracks"] == []
     assert snap["forecast"]["channel"] == "radar_lipetskk"
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Иловайск, Харцызск и близлежащие \nОпасность по БПЛА \nДНР", ["dnr"]),
+    ("Армянск и близлежащие внимание по возможным БПЛА \nРеспублика Крым", ["crimea"]),
+    ("Мелитополь и ближайшие \nОпасность по БПЛА \nЗапорожская область РФ", ["zaporozhye-oblast"]),
+    ("Причерноморье Краснодарский край \nГруппа БПЛА в обход Крыма", ["krasnodar-krai"]),
+    ("ЛДНР, Запорожская область РФ авиационная ракетная бомбовая опасность", ["lnr", "dnr", "zaporozhye-oblast"]),
+])
+def test_new_regions_from_lpr1(parser, text, expected):
+    ev = parser.parse(text)
+    assert sorted({r for e in ev for r in e.region_ids}) == sorted(expected)

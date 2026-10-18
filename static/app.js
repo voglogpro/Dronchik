@@ -49,11 +49,11 @@
   const isPhone = () => window.innerWidth < 720;
   // нижнюю часть карты (на телефоне) или левую (на компьютере) закрывает панель — центрируем по видимой области
   function fitPadding() {
-    const collapsed = $("panel").classList.contains("collapsed");
+    const closed = $("panel").classList.contains("closed");
     const panel = $("panel").getBoundingClientRect();
     map.setPadding(isPhone()
-      ? { top: 60, bottom: Math.round(collapsed ? panel.height : window.innerHeight * 0.45) + 20, left: 0, right: 0 }
-      : { top: 0, bottom: 0, left: collapsed ? 0 : Math.round(panel.right), right: 0 });
+      ? { top: 60, bottom: closed ? 70 : Math.round(window.innerHeight * 0.45) + 20, left: 0, right: 0 }
+      : { top: 0, bottom: 0, left: closed ? 0 : Math.round(panel.right), right: 0 });
   }
 
   let regionNames = {};
@@ -115,6 +115,25 @@
       paint: { "line-color": "#7a8697", "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.5, 8, 1.6], "line-opacity": 0.8 },
     }, before);
     if (!cfg.maptilerKey) addCityLabels(places);
+    // фон: области Украины (только границы) и места, откуда обычно идут пуски
+    const [neighbors, origins] = await Promise.all([
+      fetch(cfg.neighborsUrl || "api/neighbors").then((r) => r.json()).catch(() => empty()),
+      fetch(cfg.originsUrl || "api/launch-areas").then((r) => r.json()).catch(() => []),
+    ]);
+    map.addSource("neighbors", { type: "geojson", data: neighbors });
+    map.addLayer({ id: "neighbors-fill", type: "fill", source: "neighbors", paint: { "fill-color": "#11151b" } }, "regions-fill");
+    map.addLayer({
+      id: "neighbors-line", type: "line", source: "neighbors",
+      paint: { "line-color": "#3a4350", "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.4, 8, 1], "line-dasharray": [3, 2] },
+    }, "regions-fill");
+    for (const o of origins) {
+      const el = document.createElement("div");
+      el.className = "origin-mark";
+      el.dataset.layer = "launches";
+      el.dataset.origin = o.name;
+      el.innerHTML = `<i></i><span>${esc(o.name)}</span>`;
+      new maplibregl.Marker({ element: el, anchor: "left", offset: [-4, 0] }).setLngLat([o.lon, o.lat]).addTo(map);
+    }
 
     // пуски: тонкий пунктир от района пуска к вероятной цели — ниже всех слоёв целей
     map.addSource("launches", { type: "geojson", data: empty() });
@@ -202,6 +221,7 @@
     const zoomClass = () => {
       const z = map.getZoom(), c = map.getContainer().classList;
       c.toggle("z-capitals", z >= 4.6);
+      c.toggle("z-origins", z >= 5.2);
       c.toggle("z-towns", z >= 6.4);
     };
     map.on("zoom", zoomClass);
@@ -252,6 +272,8 @@
     map.getSource("fixes").setData(fc(fixes));
     for (const [id, m] of droneMarkers) if (!seen.has(id)) { m.remove(); droneMarkers.delete(id); }
     const launches = state.launches || [];
+    const liveOrigins = new Set(launches.filter((l) => l.origin && !l.planned).map((l) => l.origin));
+    document.querySelectorAll(".origin-mark").forEach((el) => el.classList.toggle("live", liveOrigins.has(el.dataset.origin)));
     map.getSource("launches").setData(fc(launches.flatMap((l) => l.routes.map((r) =>
       line(r.path.map(([la, lo]) => [lo, la]), { named: r.named, arrived: !!r.arrived })))));
     syncMarkers(launchMarkers, launches.filter((l) => l.origin_pos && !l.planned),
@@ -267,7 +289,11 @@
       (r) => r.key, etaMarkEl, (el, r) => {
         el.textContent = r.eta_min[1] <= 0 ? "подлёт возможен" : `≈ ${dur(Math.max(r.eta_min[0], 0))}`;
         return `<b>${esc(r.target)}</b><br>Возможный подлёт ${etaRange(r.eta_min)}<br><span class="sub">${r.named ? "Направление указал канал" : "Типичное направление для этого района пуска"}</span>`;
-      }, (r) => [r.path[r.path.length - 1][1], r.path[r.path.length - 1][0]]);
+      }, (r) => {
+        // плашку ставим посередине последнего отрезка, чтобы не закрывать значок «!» в центре региона
+        const [a, b] = [r.path[r.path.length - 2], r.path[r.path.length - 1]];
+        return [(a[1] + b[1]) / 2, (a[0] + b[0]) / 2];
+      });
     syncMarkers(alertMarkers, state.alert_marks || [], (a) => a.district || a.region, alertMarkEl, (el, a) => {
       // className не перезаписываем: MapLibre держит на элементе свой класс позиционирования
       el.classList.toggle("missile", a.level === "missile");
@@ -467,6 +493,9 @@
       <div class="text">${esc(m.text)}</div></li>`).join("") : `<li class="empty">Сообщений пока нет</li>`;
 
     renderHealth(state);
+    const alertCount = regions.filter(([, r]) => r.status !== "predicted").length;
+    $("panel-open").classList.toggle("alert", alertCount > 0);
+    $("panel-open-text").textContent = alertCount ? `Тревога: ${alertCount} регион${alertCount === 1 ? "" : alertCount < 5 ? "а" : "ов"}` : "Обстановка";
 
     const fc_ = state.forecast;
     $("forecast").hidden = !fc_;
@@ -673,32 +702,24 @@
     } catch { /* без цитат */ }
   })();
 
-  if (cfg.channels && cfg.channels.length) {
-    $("consent-channels").textContent = cfg.channels.map((c) => `@${c.channel}`).join(", ");
-  } else {
-    $("consent-channels").textContent = "список — в пользовательском соглашении";
-  }
+  $("consent-channels").innerHTML = (cfg.channels || []).length
+    ? cfg.channels.map((c) => `<span>@${esc(c.channel)}</span>`).join("")
+    : `<span>список — в пользовательском соглашении</span>`;
 
   $("legend-toggle").addEventListener("click", () => {
     const open = $("legend").classList.toggle("open");
     $("legend-toggle").setAttribute("aria-expanded", String(open));
   });
 
-  // Панель можно свернуть до одной строки, чтобы не закрывала карту; выбор запоминается
-  function setCollapsed(collapsed) {
-    $("panel").classList.toggle("collapsed", collapsed);
-    $("panel-toggle").setAttribute("aria-expanded", String(!collapsed));
-    $("panel-toggle").textContent = collapsed ? "Показать" : "Скрыть";
-    store.set("panelCollapsed", collapsed ? "1" : "");
+  // Панель убирается целиком (крестик), вернуть — кнопкой «Обстановка»; выбор запоминается
+  function setClosed(closed) {
+    $("panel").classList.toggle("closed", closed);
+    $("panel-open").hidden = !closed;
+    store.set("panelClosed", closed ? "1" : "");
     requestAnimationFrame(fitPadding);
   }
-  $("panel-toggle").addEventListener("click", (e) => {
-    e.stopPropagation();
-    setCollapsed(!$("panel").classList.contains("collapsed"));
-  });
-  $("panel-head").addEventListener("click", () => {
-    if ($("panel").classList.contains("collapsed")) setCollapsed(false);
-  });
-  setCollapsed(store.get("panelCollapsed") === "1");
+  $("panel-toggle").addEventListener("click", () => { setClosed(true); $("panel-open").focus(); });
+  $("panel-open").addEventListener("click", () => { setClosed(false); $("panel-toggle").focus(); });
+  setClosed(store.get("panelClosed") === "1");
   window.addEventListener("resize", fitPadding);
 })();

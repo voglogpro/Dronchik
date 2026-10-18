@@ -55,11 +55,13 @@ def main(out: str, maplibre_css: str, heatmap_json: str = "", key: str = "") -> 
     cfg = {"maptilerKey": key, "maptilerStyle": "dataviz-dark", "demo": True,
            "regionsUrl": "regions.geojson", "districtsUrl": "districts.geojson", "placesUrl": "places.json",
            "timelineUrl": "demo-timeline.json", "heatmapUrl": "heatmap.json", "quotesUrl": "quotes.json",
+           "neighborsUrl": "neighbors.geojson", "originsUrl": "launch-areas.json",
            "channels": json.loads((ROOT / "channels.default.json").read_text(encoding="utf-8"))}
     body = body.replace('<script src="config.js"></script>', f"<script>window.APP_CONFIG = {json.dumps(cfg)};</script>")
     head = (
         '<meta charset="utf-8">\n'
         "<title>Дрончик</title>\n"
+        '<link rel="stylesheet" href="fonts.css">\n'
         '<meta name="claude:viewport-fit-sides" content="cover">\n'
         '<link rel="stylesheet" href="style.css">\n'
     )
@@ -68,6 +70,13 @@ def main(out: str, maplibre_css: str, heatmap_json: str = "", key: str = "") -> 
     css = Path(maplibre_css).read_text(encoding="utf-8")
     (out_dir / "style.css").write_text(css + "\n" + (static / "style.css").read_text(encoding="utf-8"), encoding="utf-8")
     (out_dir / "app.js").write_text((static / "app.js").read_text(encoding="utf-8"), encoding="utf-8")
+    (out_dir / "neighbors.geojson").write_text((ROOT / "geodata" / "neighbors.geojson").read_text(encoding="utf-8"), encoding="utf-8")
+    areas = json.loads((ROOT / "geodata" / "launch_areas.json").read_text(encoding="utf-8"))["areas"]
+    (out_dir / "launch-areas.json").write_text(json.dumps([{"name": a[0], "lat": a[1], "lon": a[2]} for a in areas], ensure_ascii=False), encoding="utf-8")
+    (out_dir / "fonts.css").write_text((static / "fonts.css").read_text(encoding="utf-8"), encoding="utf-8")
+    (out_dir / "fonts").mkdir(exist_ok=True)
+    for font in (static / "fonts").glob("*.woff2"):
+        (out_dir / "fonts" / font.name).write_bytes(font.read_bytes())
     (out_dir / "quotes.json").write_text((static / "quotes.json").read_text(encoding="utf-8"), encoding="utf-8")
     if heatmap_json:
         heat = Path(heatmap_json).read_text(encoding="utf-8")
