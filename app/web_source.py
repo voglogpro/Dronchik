@@ -46,21 +46,50 @@ def parse_page(page: str) -> list[tuple[int, float, str]]:
     return sorted(posts)
 
 
+MAX_PAGES = 15  # не больше ~300 постов назад за один проход
+
+
+async def fetch_since(client: httpx.AsyncClient, channel: str, border: int,
+                      since: float) -> tuple[list[tuple[int, float, str]], int]:
+    """(посты новее border и since, id самого свежего поста канала).
+
+    Листает t.me/s/…?before= назад, пока не дойдёт до border или since.
+
+    Одна страница — ~20 постов: у активного канала это меньше часа. Без пролистывания после
+    рестарта терялась бы опасность, объявленная раньше, а при всплеске сообщений — часть постов.
+    """
+    posts: dict[int, tuple[int, float, str]] = {}
+    newest = border
+    before = None
+    for _ in range(MAX_PAGES):
+        url = f"https://t.me/s/{channel}" + (f"?before={before}" if before else "")
+        resp = await client.get(url)
+        resp.raise_for_status()
+        page = parse_page(resp.text)
+        if not page:
+            break
+        newest = max(newest, page[-1][0])
+        for post in page:
+            if post[0] > border and post[1] >= since:
+                posts[post[0]] = post
+        oldest_id, oldest_t = page[0][0], page[0][1]
+        if oldest_id <= border + 1 or oldest_t < since or oldest_id <= 1:
+            break
+        before = oldest_id
+        await asyncio.sleep(1.0)
+    return sorted(posts.values()), newest
+
+
 async def poll_channel(client: httpx.AsyncClient, channel: str, last_seen: dict[str, int],
                        on_message: OnMessage, history_s: float) -> None:
-    resp = await client.get(f"https://t.me/s/{channel}")
-    resp.raise_for_status()
-    posts = parse_page(resp.text)
-    if not posts:
-        log.warning("канал %s: нет постов (закрыт или переименован?)", channel)
-        return
-    first_run = channel not in last_seen
     border = last_seen.get(channel, 0)
+    # первый проход — история за history_s; дальше — всё новее последнего виденного поста
+    since = time.time() - history_s if border == 0 else 0
+    posts, newest = await fetch_since(client, channel, border, since)
     for msg_id, t, text in posts:
-        if msg_id <= border or (first_run and time.time() - t > history_s):
-            continue
         await on_message(channel.lower(), msg_id, t, text)
-    last_seen[channel] = max(border, posts[-1][0])
+    # запоминаем самый свежий пост канала, даже если он старше окна истории
+    last_seen[channel] = max(border, newest)
 
 
 async def run_web_channels(channels: list[str], on_message: OnMessage, interval: float = 30.0,

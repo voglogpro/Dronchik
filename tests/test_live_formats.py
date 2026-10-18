@@ -143,3 +143,51 @@ def test_engaged_and_shootdown(gaz):
     e.process("radar_moscow_99", "ГО Ступино - сбитие БПЛА.", T0 + 240)
     snap = e.snapshot(T0 + 250)
     assert snap["tracks"][0]["status"] == "destroyed" and len(snap["shootdowns"]) == 1
+
+
+def test_fetch_since_paginates_back_until_window():
+    import asyncio
+    import time as _time
+
+    from app import web_source
+
+    now = _time.time()
+
+    def page(ids):
+        return "".join(
+            f'<div class="tgme_widget_message_wrap"><div data-post="ch/{i}">'
+            f'<div class="tgme_widget_message_text js-message_text">пост {i}</div>'
+            f'<time datetime="{web_source.datetime.fromtimestamp(now - (100 - i) * 600).astimezone().isoformat()}"></time>'
+            f"</div></div>" for i in ids)
+
+    class Resp:
+        def __init__(self, text):
+            self.text = text
+
+        def raise_for_status(self):
+            pass
+
+    class Client:
+        def __init__(self):
+            self.urls = []
+
+        async def get(self, url):
+            self.urls.append(url)
+            before = int(url.split("before=")[1]) if "before=" in url else 101
+            return Resp(page(range(max(before - 20, 1), before)))
+
+    async def no_sleep(_):
+        pass
+
+    web_source.asyncio.sleep, real_sleep = no_sleep, web_source.asyncio.sleep
+    try:
+        client = Client()
+        # посты раз в 10 минут: за 5 часов — 30 постов, это две страницы
+        posts, newest = asyncio.run(web_source.fetch_since(client, "ch", 0, now - 5 * 3600))
+        assert newest == 100 and len(client.urls) == 2
+        assert [p[0] for p in posts] == list(range(70, 101))
+        client = Client()
+        posts, newest = asyncio.run(web_source.fetch_since(client, "ch", 95, 0))
+        assert [p[0] for p in posts] == [96, 97, 98, 99, 100] and len(client.urls) == 1
+    finally:
+        web_source.asyncio.sleep = real_sleep
