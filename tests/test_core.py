@@ -256,3 +256,53 @@ def test_new_fixation_behind_a_moving_drone_is_another_drone(gaz):
     # а фиксация там, где дрон и должен быть (по курсу, дальше на восток), продолжает тот же трек
     ahead = tr.add_sighting(p["Курчатов"], T0 + 38 * 60, "ch3")
     assert ahead is a
+
+
+def test_mass_flow_corridor_in_engine_and_hidden_in_public(gaz):
+    from app.engine import Engine
+    e = Engine(gaz)
+    e.process("radar_plus_bpla", "🚨От 100 БПЛА через Воронежскую, Белгородскую, Курскую области в направлении Московской, Рязанской и Ярославской областей.", T0, 7)
+    snap = e.snapshot(T0 + 60)
+    (flow,) = snap["flows"]
+    assert flow["count"] == 100 and flow["to"] == ["Московская область", "Рязанская область", "Ярославская область"]
+    kinds = [p["kind"] for p in flow["paths"]]
+    assert kinds[0] == "main" and kinds.count("branch") == 3
+    # цепочка начинается на границе Украины, дальше — области в порядке от границы (Белгородская → Курская → Воронежская)
+    main = flow["paths"][0]["path"]
+    assert len(main) == 4 and main[1] != main[3]
+    # через 40 минут без подтверждения коридор пропадает, в публичной версии его нет совсем
+    assert e.snapshot(T0 + 41 * 60)["flows"] == []
+    assert e.public_snapshot(T0 + 60)["flows"] == []
+    assert "flow" in snap["feed"][0]["kinds"] and e.public_snapshot(T0 + 60)["feed"] == []
+
+
+def test_single_drone_near_border_gets_inland_course(gaz):
+    from app.engine import Engine
+    from app.geo import angle_diff
+    e = Engine(gaz)
+    e.process("locatorru", "Шебекино и близлежащие, Белгородская область - пролёты БПЛА от госграницы в тыл. Много.", T0)
+    (track,) = e.snapshot(T0 + 60)["tracks"]
+    assert track["mass"] and track["prediction"]["basis"] == "inland"
+    first = track["points"][0]
+    away = e.origins.inland(first["lat"], first["lon"])[0]
+    assert angle_diff(track["prediction"]["bearing"], away) < 2
+
+
+def test_neighbor_and_backward_fixations_near_border_are_other_drones(gaz):
+    from app.gazetteer import Place
+    from app.geo import destination
+    e_places = {pl.name: pl for pl in gaz.places}
+    tr = Tracker(gaz)
+    from app.origin import OriginFinder
+    from app.gazetteer import DATA_DIR
+    tr.finder = OriginFinder(DATA_DIR)
+    base = e_places["Белгород"]
+    inland, km = tr.finder.inland(base.lat, base.lon)
+    a = tr.add_sighting(base, T0, "ch1")
+    ahead = Place("Точка впереди", base.region_id, *destination(base.lat, base.lon, inland, 40))
+    back = Place("Точка позади", base.region_id, *destination(base.lat, base.lon, inland + 180, 40))
+    side = Place("Точка сбоку", base.region_id, *destination(base.lat, base.lon, inland + 100, 40))
+    if km <= 100:    # правила действуют у границы
+        assert tr.add_sighting(back, T0 + 15 * 60, "ch2") is not a        # к границе — другой дрон
+        assert tr.add_sighting(side, T0 + 16 * 60, "ch3") is not a        # сбоку — тоже
+    assert tr.add_sighting(ahead, T0 + 20 * 60, "ch4") is a              # вглубь — продолжение

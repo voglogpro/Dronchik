@@ -222,6 +222,21 @@ class Gazetteer:
             for alias in REGION_ALIASES.get(region.id, []):
                 region_patterns.append((phrase_pattern(alias, exact=alias in EXACT_ALIASES), place))
 
+        # «Липецкой, Орловской и Тульской области»: прилагательное области без слова «область» — тоже область,
+        # а не город («Курская» ≠ Курск); «Курский район» сюда не попадает
+        bare: list[tuple[str, Place]] = []
+        for region in self.regions.values():
+            m = re.match(r"^(\S+)\s+(область|край)$", normalize(region.name))
+            if m:
+                stem = word_stem(m.group(1))
+                # «область» — женский род (Курской, Курскую): формы на «-ом» совпали бы с городом («над Курском»);
+                # «край» — мужской (Краснодарского, Краснодарском)
+                endings = "ой|ую|ая|ых|ие" if m.group(2) == "область" else "ого|ому|ом|им|ий|ый|ых|ие"
+                bare.append((rf"(?<![{LETTER}]){re.escape(stem)}(?:{endings})(?![{LETTER}])"
+                             rf"(?!\s+(?:район|округ|г\.?\s?о(?![{LETTER}])|р-н))",
+                             Place(region.name, region.id, region.center[0], region.center[1], kind="region")))
+        self._bare_region_res = [(re.compile(p), pl) for p, pl in sorted(bare, key=lambda x: -len(x[0]))]
+
         # длинные шаблоны первыми, чтобы «Старый Оскол» не съел «Оскол» и т.п.
         self._region_res = [(re.compile(p), pl) for p, pl in sorted(region_patterns, key=lambda x: -len(x[0]))]
         self._place_res = [(re.compile(p), pl) for p, pl in sorted(patterns, key=lambda x: -len(x[0]))]
@@ -253,6 +268,7 @@ class Gazetteer:
                     found.append(Mention(m.start(), m.end(), place))
 
         scan(self._region_res)
+        scan(self._bare_region_res)
         context = {m.place.region_id for m in found} or ({context_region} if context_region else set())
 
         def scan_districts(compiled, need_context: bool):

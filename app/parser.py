@@ -25,6 +25,7 @@ DESTROYED = "destroyed"
 ENGAGED = "engaged"  # «работа ПВО» — цель под огнём, но не сбита
 HEADING = "heading"  # «ещё один в сторону Корочи» — курс без точки обнаружения
 UAV_WARN = "uav_warn"  # «жёлтый уровень»: внимание по БПЛА, ещё не тревога
+FLOW = "flow"          # «массовый пролёт через Курскую, Орловскую область в направлении Тульской» — коридор
 
 RX_CLEAR = re.compile(r"отбо[йяе]|угроз\w*\s+миновал|опасност\w*\s+миновал|отмен\w*\s+(?:угроз|опасн|тревог|режим)"
     r"|режим\w*(?:\s+\w+){0,3}\s+(?:снят|отменен)|снят\w*\s+режим")
@@ -41,6 +42,11 @@ RX_ENGAGED = re.compile(r"работ\w*\s+(?:\w+\s+)?пво|пво\s+работ�
 RX_TARGET = re.compile(r"(?:курс\w*|движ\w*|летит|летят|направля\w*)\s+(?:на|в сторону|в направлении|к)\s+|в сторону\s+|в направлении\s+|\s*(?:→|->|➡️?)\s*")
 RX_COUNT = re.compile(r"(?<![\d:])(\d{1,3})\s*(?:х\s*)?(?:бпла|беспилот|дрон|шахед|герань|мопед|бла|цел)|(?:бпла|беспилот\w*|шахед\w*|цел\w*)\s*[x×х]\s*(\d{1,3})")
 RX_GROUP = re.compile(r"групп[аы]|несколько|рой|стая")
+# массовость и коридоры: «От 100 БПЛА через Воронежскую, Курскую области в направлении Московской и далее на Ярославскую»
+RX_MASS = re.compile(r"массов|много|десятк|сотн|волн[аы]|от\s+\d{2,4}\s+(?:бпла|беспилот|дрон)")
+RX_FLOW_TO = re.compile(r"(?:в\s+направлении|в\s+сторону|(?<![а-я])на(?![а-я])|курсом\s+на)\s+")
+RX_FLOW_BEYOND = re.compile(r"(?:и\s+)?далее\s+(?:(?:на|в\s+направлении|в\s+сторону)\s+)?")
+RX_FLOW_COUNT = re.compile(r"от\s+(\d{2,4})\s+(?:бпла|беспилот|дрон)")
 
 # подписи каналов: «📡Локатор России - @locatorru» — вырезаем ссылки и упоминания, строки-подписи выбрасываем
 RX_LINKS = re.compile(r"@[a-z0-9_]{4,}|https?://\S+|t\.me/\S+|max\.ru/\S+")
@@ -77,6 +83,10 @@ class Event:
     count: int = 1
     scope: str = "all"               # для CLEAR: что снимаем — uav | missile | all
     text: str = ""
+    mass: bool = False               # канал назвал пролёт массовым («много», «массовые», «от 100 БПЛА»)
+    via: list[str] = field(default_factory=list)      # FLOW: области, через которые идёт поток
+    to: list[str] = field(default_factory=list)       # FLOW: куда
+    beyond: list[str] = field(default_factory=list)   # FLOW: «и далее на …»
 
 
 def _direction_bearing(text: str) -> float | None:
@@ -105,6 +115,29 @@ def _count(text: str) -> int:
         if 0 < n < 200:
             return n
     return 2 if RX_GROUP.search(text) else 1
+
+
+def _flow(line: str, mentions: list[Mention]) -> Event | None:
+    """Массовый пролёт коридором: «через X, Y в направлении Z и далее на W» — только если область названа и есть «куда»."""
+    if not RX_MASS.search(line):
+        return None
+    regions = [m for m in mentions if m.place.kind == "region"]
+    to_m = RX_FLOW_TO.search(line)
+    if not regions or not to_m:
+        return None
+    via = [m for m in regions if m.end <= to_m.start()]
+    after = [m for m in regions if m.start >= to_m.end()]
+    if not after:
+        return None
+    beyond_m = RX_FLOW_BEYOND.search(line, to_m.end())
+    to = [m for m in after if not beyond_m or m.start < beyond_m.start()]
+    beyond = [m for m in after if beyond_m and m.start >= beyond_m.start() and m not in to]
+    if not to:
+        to, beyond = beyond, []
+    ids = lambda ms: list(dict.fromkeys(m.place.region_id for m in ms))
+    n = RX_FLOW_COUNT.search(line)
+    return Event(FLOW, ids(via) + [r for r in ids(to) if r not in ids(via)], via=ids(via), to=ids(to), beyond=ids(beyond),
+                 count=int(n.group(1)) if n else 1, mass=True, text=line.strip())
 
 
 def _split_targets(line: str, mentions: list[Mention]) -> tuple[list[Mention], Mention | None]:
@@ -186,6 +219,13 @@ class MessageParser:
             if region_ids:
                 context_region = region_ids[0]
             line_regions = region_ids or ([context_region] if context_region else [])
+            flow = _flow(line, mentions)
+            if flow:
+                # поток — один коридор на карте; тревога — там, где он идёт сейчас, куда направляется — ещё нет
+                events.append(flow)
+                if flow.via:
+                    events.append(Event(UAV_ALERT, flow.via, text=raw_line.strip()))
+                continue
 
             if RX_CLEAR.search(line):
                 # «Отбой по ранее объявленным регионам» без региона — снимает всё, что объявлял этот канал
@@ -231,7 +271,7 @@ class MessageParser:
                     events.append(Event(
                         SIGHTING, [m.place.region_id], [m.place.district_id] if m.place.district_id else [],
                         place=m.place, target=target_place,
-                        bearing=bearing, count=count, text=raw_line.strip(),
+                        bearing=bearing, count=count, text=raw_line.strip(), mass=bool(RX_MASS.search(line)),
                     ))
             elif target_place:
                 events.append(Event(HEADING, line_regions, target=target_place, count=count, text=raw_line.strip()))

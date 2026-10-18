@@ -50,6 +50,16 @@ def turn_penalty(turn: float, n_points: int = 3) -> float:
 LAG_AFTER_MIN = 8.0         # правило действует, если с последней фиксации прошло больше стольких минут
 LAG_FRACTION = 0.35         # новая точка ближе этой доли ожидаемого пути от последней — «позади»
 LAG_MIN_TRAVEL_KM = 25.0    # ... и ожидаемый путь не меньше (иначе цель могла просто стоять)
+# Модель «от границы вглубь». Измерено по сообщениям «откуда → куда»: до 60 км от границы 93% дронов летят вглубь в пределах 90°
+# (97% в пределах 120°), дальше направление размыто — дроны идут к разным городам. Поэтому жёсткие правила («не к границе»,
+# «следующая точка вглубь») действуют только у границы, а вероятный курс вглубь показывается недалеко от неё.
+NEAR_BORDER_KM = 100.0      # правила «не к границе» действуют, пока цель не дальше этого от границы
+INLAND_HINT_KM = 250.0      # вероятный курс вглубь для цели без курса — не дальше этого от границы
+BACK_DEG = 120.0            # движение к границе (угол к курсу «вглубь» больше этого) — не продолжение пути
+FIRST_DEG = 90.0            # у цели с одной точкой у границы: следующая точка не дальше 90° от курса «вглубь»
+SIDE_DEG = 80.0             # у цели с курсом по 3+ точкам: поворот больше этого — другой дрон, а не манёвр
+SIDE_DEG_SHORT = 120.0      # по двум точкам курс ненадёжен (центры районов), допуск шире
+SAME_SPOT_KM = 12.0         # в пределах этого расстояния — то же место, а не движение
 REVERSAL_DEG = 110.0
 REVERSAL_MIN_KM = 12.0
 REVISIT_KM = 8.0            # «то же место, что одна из прошлых точек трека»
@@ -94,6 +104,9 @@ class Track:
     engaged_at: float | None = None  # когда последний раз сообщали о работе ПВО по этой цели
     steer: Steer | None = None       # поворот к области с новой тревогой (до следующей фиксации)
     end: tuple[float, float, float] | None = None  # (lat, lon, t) где сбит: маршрут заканчивается здесь
+    inland: float | None = None      # курс «вглубь страны» в последней точке (от границы Украины)
+    border_km: float | None = None   # расстояние от последней точки до границы Украины
+    mass: bool = False               # канал назвал пролёт массовым
 
     @property
     def last(self) -> TrackPoint:
@@ -114,15 +127,21 @@ class Track:
         # курс — по последнему отрезку: после поворота («на Краснодар, затем на Ставрополь»)
         # прогноз сразу следует новому направлению, а не среднему за всё время
         prev = next((p for p in reversed(self.points[:-1])
-                     if haversine_km(p.lat, p.lon, last.lat, last.lon) > 5), None)
+                     if haversine_km(p.lat, p.lon, last.lat, last.lon) > 10), None)
         if prev is not None:
             observed_bearing = bearing_deg(prev.lat, prev.lon, last.lat, last.lon)
+            # курс «к границе» — шум склейки разных целей: не принимаем
+            if self.inland is not None and (self.border_km or 1e9) <= NEAR_BORDER_KM \
+                    and angle_diff(observed_bearing, self.inland) > BACK_DEG and not self.target:
+                observed_bearing = None
         if self.target and haversine_km(last.lat, last.lon, self.target.lat, self.target.lon) > 5:
             return bearing_deg(last.lat, last.lon, self.target.lat, self.target.lon), speed, "target"
         if observed_bearing is not None:
             return observed_bearing, speed, "observed"
         if self.bearing_hint is not None:
             return self.bearing_hint, speed, "hint"
+        if self.inland is not None and (self.border_km or 1e9) <= INLAND_HINT_KM:
+            return self.inland, speed, "inland"   # курса нет — вероятно, вглубь страны
         return None, speed, "none"
 
     def course(self) -> tuple[tuple[float, float, float], float | None, float, str]:
@@ -172,15 +191,20 @@ class Prediction:
 
 
 class Tracker:
-    def __init__(self, gazetteer: Gazetteer):
+    def __init__(self, gazetteer: Gazetteer, inland=None):
         self.gaz = gazetteer
+        self.finder = inland   # OriginFinder: курс «вглубь» от границы Украины
         self.tracks: list[Track] = []
         self._ids = itertools.count(1)
 
     # ---- приём событий ----
 
+    def _inland(self, lat: float, lon: float) -> tuple[float, float] | None:
+        return self.finder.inland(lat, lon) if self.finder is not None else None
+
     def add_sighting(self, place: Place, t: float, source: str, count: int = 1,
-                     target: Place | None = None, bearing: float | None = None, group: object = None) -> Track:
+                     target: Place | None = None, bearing: float | None = None, group: object = None,
+                     mass: bool = False) -> Track:
         self.expire(t)
         track = self._duplicate_of(place, t)
         if track:
@@ -207,6 +231,9 @@ class Tracker:
             if target is None:
                 track.target = None  # новое направление без цели отменяет старую цель
         track.count = max(track.count, count)
+        track.mass = track.mass or mass
+        info = self._inland(track.last.lat, track.last.lon)
+        track.inland, track.border_km = info if info else (None, None)
         return track
 
     def add_heading(self, region_ids: list[str], target: Place, t: float) -> Track | None:
@@ -315,25 +342,43 @@ class Tracker:
                 best, best_cost = tr, cost
         return best
 
-    @staticmethod
-    def _behind(tr: Track, place: Place, t: float) -> bool:
-        """Новая фиксация позади цели: возврат в пройденную точку, разворот >110° или «отстала» от цели с курсом."""
-        if len(tr.points) < 2:
-            return False
+    def _behind(self, tr: Track, place: Place, t: float) -> bool:
+        """Новая фиксация не может быть продолжением пути этой цели: она позади, сбоку или у границы.
+
+        Поток дронов идёт один за другим, и соседние дроны фиксируются слева и справа; дрон вглубь страны не
+        возвращается и вбок не уходит. Поэтому такая фиксация — другой дрон, а не «поворот» первого.
+        """
         last = tr.last
-        for p in tr.points[:-1]:
-            if haversine_km(p.lat, p.lon, place.lat, place.lon) <= REVISIT_KM \
-                    and haversine_km(p.lat, p.lon, last.lat, last.lon) >= LEFT_BEHIND_KM:
-                return True
         bearing, speed, basis = tr.motion()
         d_last = haversine_km(last.lat, last.lon, place.lat, place.lon)
+        if len(tr.points) >= 2:
+            for p in tr.points[:-1]:
+                if haversine_km(p.lat, p.lon, place.lat, place.lon) <= REVISIT_KM \
+                        and haversine_km(p.lat, p.lon, last.lat, last.lon) >= LEFT_BEHIND_KM:
+                    return True
+            if basis == "observed" and bearing is not None:
+                dt_min = (t - last.t) / 60
+                expected = speed * dt_min / 60
+                if dt_min > LAG_AFTER_MIN and expected > LAG_MIN_TRAVEL_KM and d_last < LAG_FRACTION * expected:
+                    return True
+        if d_last <= SAME_SPOT_KM:
+            return False
+        v = bearing_deg(last.lat, last.lon, place.lat, place.lon)
+        # заявленная цель или направление разрешают движение в свою сторону
+        ref = None
+        if tr.target:
+            ref = bearing_deg(last.lat, last.lon, tr.target.lat, tr.target.lon)
+        elif tr.bearing_hint is not None:
+            ref = tr.bearing_hint
+        if ref is not None and angle_diff(v, ref) <= 60:
+            return False
+        near_border = tr.inland is not None and (tr.border_km or 1e9) <= NEAR_BORDER_KM
+        if near_border and angle_diff(v, tr.inland) > BACK_DEG:
+            return True          # к границе — не продолжение
         if basis == "observed" and bearing is not None:
-            dt_min = (t - last.t) / 60
-            expected = speed * dt_min / 60
-            if dt_min > LAG_AFTER_MIN and expected > LAG_MIN_TRAVEL_KM and d_last < LAG_FRACTION * expected:
-                return True
-            if d_last > REVERSAL_MIN_KM:
-                return angle_diff(bearing, bearing_deg(last.lat, last.lon, place.lat, place.lon)) > REVERSAL_DEG
+            return angle_diff(v, bearing) > (SIDE_DEG if len(tr.points) >= 3 else SIDE_DEG_SHORT)
+        if near_border and basis in ("inland", "none"):
+            return angle_diff(v, tr.inland) > FIRST_DEG
         return False
 
     def active(self, t: float) -> list[Track]:
@@ -355,7 +400,7 @@ class Tracker:
         elapsed_min = max(now - track.last.t, 0) / 60
         # по одному слову «на север» без второй точки рисуем только короткий отрезок
         # чем меньше оснований у курса, тем короче прогноз: по двум точкам — 25 мин, по трём и более и до заявленной цели — 60
-        if basis in ("hint", "alert"):
+        if basis in ("hint", "alert", "inland"):
             full = HINT_PREDICT_MINUTES
         elif basis == "observed":
             full = PREDICT_MINUTES if len(track.points) >= 3 else 25
@@ -376,7 +421,7 @@ class Tracker:
 
         # ширина конуса — по реальной точности: по истории курс по фиксациям ошибается
         # на 35° в медиане, поэтому конус заметно шире, чем при заявленной каналом цели
-        half_angle = {"target": 12.0, "observed": 30.0, "hint": 35.0, "alert": 35.0}[basis]
+        half_angle = {"target": 12.0, "observed": 30.0, "hint": 35.0, "alert": 35.0, "inland": 40.0}[basis]
         if basis == "observed" and len(track.points) >= 3:
             half_angle = 25.0
         cone_left, cone_right = [], []

@@ -9,7 +9,7 @@ from .geo import bearing_deg
 from .gazetteer import DATA_DIR, Gazetteer, normalize
 from .origin import OriginFinder
 from .launches import RX_LAUNCH, LaunchBoard, LaunchDetector
-from .parser import RX_FORECAST, CLEAR, DESTROYED, ENGAGED, HEADING, MISSILE_ALERT, SIGHTING, UAV_ALERT, UAV_WARN, MessageParser
+from .parser import RX_FORECAST, CLEAR, DESTROYED, ENGAGED, FLOW, HEADING, MISSILE_ALERT, SIGHTING, UAV_ALERT, UAV_WARN, MessageParser
 from .tracker import TRACK_TTL_S, Tracker
 
 UAV_ALERT_TTL_S = 2 * 3600       # каналы часто забывают писать «отбой»
@@ -21,6 +21,7 @@ SHOOTDOWN_SHOW_S = 12 * 60       # сколько показывать отме�
 FORECAST_SHOW_S = 14 * 3600      # «прогноз на ночь» актуален до утра
 ENGAGED_SHOW_S = 10 * 60         # «под прицелом ПВО» — пока свежие сообщения о работе ПВО
 OLD_TRACK_SHOW_S = 12 * 60       # потерянные и сбитые цели остаются на карте столько после последней фиксации/сбития
+FLOW_SHOW_S = 40 * 60            # коридор массового пролёта виден столько после последнего подтверждения
 LONE_TRACK_SHOW_S = 15 * 60      # одна фиксация без второй точки: курса нет, держим недолго
 
 @dataclass
@@ -71,11 +72,12 @@ class Engine:
         self.parser = MessageParser(gazetteer)
         self.forecast_parser = ForecastParser(gazetteer)
         self.origins = OriginFinder(DATA_DIR)
-        self.tracker = Tracker(gazetteer)
+        self.tracker = Tracker(gazetteer, self.origins)
         self.channel_regions = channel_regions or {}
         self.alerts: dict[str, RegionAlert] = {}
         self.district_alerts: dict[str, RegionAlert] = {}
         self.feed: deque[dict] = deque(maxlen=150)
+        self.flows: list[dict] = []         # коридоры массового пролёта: «через X, Y в направлении Z»
         self.shootdowns: deque[dict] = deque(maxlen=200)
         self.forecast: dict | None = None   # последний «прогноз обстановки» канала: текст и векторы направлений
         self.health: dict = {}              # состояние источника (заполняет web_source)
@@ -122,6 +124,8 @@ class Engine:
                     if status == "uav" and "uav" not in getattr(self.district_alerts.get(did), "levels", {}):
                         self.tracker.steer_to_alert(did, t)
                     self._raise(self.district_alerts, did, status, t, channel, announced=True)
+            elif ev.kind == FLOW:
+                self._add_flow(ev, channel, msg_id, t)
             elif ev.kind == UAV_WARN:
                 # «жёлтый уровень»: внимание. Красный уровень и тревога не понижаются
                 for rid in ev.region_ids:
@@ -129,7 +133,8 @@ class Engine:
                 for did in ev.district_ids:
                     self._raise(self.district_alerts, did, "warn", t, channel, announced=True)
             elif ev.kind == SIGHTING:
-                self.tracker.add_sighting(ev.place, t, channel, ev.count, ev.target, ev.bearing, group=(channel, msg_id or t))
+                self.tracker.add_sighting(ev.place, t, channel, ev.count, ev.target, ev.bearing,
+                                          group=(channel, msg_id or t), mass=ev.mass)
                 self._raise(self.alerts, ev.place.region_id, "uav", t, channel)
                 for did in ev.district_ids:
                     self._raise(self.district_alerts, did, "uav", t, channel)
@@ -223,6 +228,7 @@ class Engine:
                 "count": max(tr.count, 1),
                 "engaged": tr.status == "active" and tr.engaged_at is not None and now - tr.engaged_at <= ENGAGED_SHOW_S,
                 "target": tr.target.name if tr.target else None,
+                "mass": tr.mass,
                 "origin": self._origin(tr),
                 "end": {"lat": tr.end[0], "lon": tr.end[1], "t": tr.end[2]} if tr.end else None,
                 "points": [
@@ -276,6 +282,7 @@ class Engine:
         return {"now": now, "version": self.version, "regions": regions, "districts": districts,
                 "tracks": tracks, "shootdowns": shootdowns, "alert_marks": self._alert_marks(now),
                 "launches": launches if pub.launches else [],
+                "flows": self._flows_snapshot(now) if pub.tracks else [],
                 "forecast": forecast,
                 "health": self.health,
                 "feed": list(self.feed) if pub.feed else [], "publish": dict(pub.__dict__), "mode": "full"}
@@ -287,7 +294,7 @@ class Engine:
         snap = dict(full or self.snapshot(now))
         snap["regions"] = {k: v for k, v in snap["regions"].items() if v["status"] != "predicted"}
         snap["districts"] = {k: v for k, v in snap["districts"].items() if v["status"] != "predicted"}
-        snap["tracks"], snap["shootdowns"], snap["launches"] = [], [], []
+        snap["tracks"], snap["shootdowns"], snap["launches"], snap["flows"] = [], [], [], []
         snap["alert_marks"] = self._alert_marks(now, everywhere=True)
         snap["forecast"] = None  # ночной прогноз «чего ждать» — часть подробной версии
         # лента тревог: только объявления опасности, «внимание» и отбои; сообщения о фиксациях,
@@ -323,6 +330,57 @@ class Engine:
             marks.append({"lat": r.center[0], "lon": r.center[1], "level": a.status, "name": r.name,
                           "region": rid, "district": None, "channels": sorted(a.channels), "updated": a.updated})
         return marks
+
+    def _add_flow(self, ev, channel: str, msg_id: int | None, t: float) -> None:
+        key = (tuple(sorted(ev.via)), tuple(sorted(ev.to)))
+        flow = next((f for f in self.flows if f["key"] == key and t - f["t"] <= 3600), None)
+        if flow is None:
+            flow = {"key": key, "since": t, "channels": set(), "via": list(ev.via), "to": list(ev.to), "beyond": list(ev.beyond)}
+            self.flows.append(flow)
+            del self.flows[:-30]
+        flow.update(t=max(t, flow.get("t", 0)), channel=channel, msg_id=msg_id, count=max(ev.count, flow.get("count", 1)),
+                    beyond=list(ev.beyond) or flow["beyond"])
+        flow["channels"].add(channel)
+
+    def _flow_paths(self, f: dict) -> list[dict]:
+        """Линии коридора: граница → области, через которые идёт поток → веер к областям назначения → «далее»."""
+        center = lambda rid: [round(self.gaz.regions[rid].center[0], 3), round(self.gaz.regions[rid].center[1], 3)]
+        border = lambda rid: (self.origins.nearest(*self.gaz.regions[rid].center) or (0, 0, 1e9))[2]
+        via = sorted((r for r in f["via"] if r in self.gaz.regions), key=border)
+        to = [r for r in f["to"] if r in self.gaz.regions and r not in via]
+        chain: list[list[float]] = []
+        anchor = (via or to or [None])[0]
+        if anchor is not None and self.origins.geom is not None:
+            near = self.origins.nearest(*self.gaz.regions[anchor].center)
+            if near and near[2] < 600:
+                chain.append([round(near[0], 3), round(near[1], 3)])
+        chain += [center(r) for r in via]
+        paths = []
+        if len(chain) >= 2:
+            paths.append({"path": chain, "kind": "main"})
+        tail = chain[-1] if chain else None
+        nearest_to = None
+        for rid in sorted(to, key=border):
+            if tail is not None:
+                paths.append({"path": [tail, center(rid)], "kind": "branch"})
+            nearest_to = nearest_to or rid
+        for rid in f["beyond"]:
+            if rid in self.gaz.regions and rid not in via and nearest_to:
+                paths.append({"path": [center(nearest_to), center(rid)], "kind": "branch"})
+        return paths
+
+    def _flows_snapshot(self, now: float) -> list[dict]:
+        out = []
+        for f in self.flows:
+            if now - f["t"] > FLOW_SHOW_S:
+                continue
+            names = lambda ids: [self.gaz.regions[r].name for r in ids if r in self.gaz.regions]
+            out.append({"id": "|".join(f["key"][0]) + ">" + "|".join(f["key"][1]), "t": f["t"], "since": f["since"],
+                        "channel": f["channel"], "msg_id": f["msg_id"], "channels": sorted(f["channels"]),
+                        "count": f["count"] if f["count"] > 1 else None,
+                        "via": names(f["via"]), "to": names(f["to"]), "beyond": names(f["beyond"]),
+                        "paths": self._flow_paths(f)})
+        return out
 
     def _origin(self, tr) -> dict | None:
         """Примерная точка вылета: у границы Украины, по курсу первых фиксаций или ближайшая."""

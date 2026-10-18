@@ -4,10 +4,10 @@
   const cfg = window.APP_CONFIG || {};
   const tg = window.Telegram && window.Telegram.WebApp;
   if (tg && tg.initData) { tg.ready(); tg.expand(); document.documentElement.classList.add("tg"); }
-  const COLORS = { track: "#ff5a5f", missile: "#e5484d", uav: "#f2762e", warn: "#efe08a", predicted: "#f5c24c", launch: "#a99cf0", forecast: "#8fb3d9" };
+  const COLORS = { flow: "#ffb347", track: "#ff5a5f", missile: "#e5484d", uav: "#f2762e", warn: "#efe08a", predicted: "#f5c24c", launch: "#a99cf0", forecast: "#8fb3d9" };
   const LABELS = { missile: "Ракетная опасность", uav: "Угроза БПЛА", warn: "Внимание по БПЛА", predicted: "Вероятный подлёт" };
   const SEVERITY = { missile: 4, uav: 3, warn: 2, predicted: 1 };
-  const BASIS = { target: "по заявленному курсу", observed: "по фиксациям", hint: "по направлению", alert: "по новой тревоге в соседней области" };
+  const BASIS = { target: "по заявленному курсу", observed: "по фиксациям", hint: "по направлению", alert: "по новой тревоге в соседней области", inland: "вероятно, вглубь страны от границы" };
 
   const $ = (id) => document.getElementById(id);
   const eta = (m) => (m <= 1 ? "< 1 мин" : `~${m} мин`);
@@ -152,6 +152,16 @@
       layout: { "line-cap": "round" },
       paint: { "line-color": COLORS.forecast, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1, 7, 1.6], "line-opacity": 0.38, "line-dasharray": [2, 3] },
     }, "launch-routes");
+    // массовые пролёты: коридор из сообщения канала — широкая полоса под линиями целей
+    map.addSource("flows", { type: "geojson", data: empty() });
+    map.addLayer({
+      id: "flows-glow", type: "line", source: "flows", layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": COLORS.flow, "line-opacity": 0.16, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 7, 7, 16] },
+    }, "forecast-vectors");
+    map.addLayer({
+      id: "flows", type: "line", source: "flows", layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": COLORS.flow, "line-opacity": 0.8, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1.6, 7, 3], "line-dasharray": [2.2, 1.4] },
+    }, "forecast-vectors");
     // тепловая карта пролётов за период — под всеми слоями целей
     map.addSource("heat", { type: "geojson", data: empty() });
     map.addLayer({
@@ -179,7 +189,7 @@
     });
     map.addLayer({
       id: "predicted", type: "line", source: "predicted",
-      paint: { "line-color": COLORS.predicted, "line-width": 2, "line-dasharray": [2, 1.5], "line-opacity": 0.9 },
+      paint: { "line-color": COLORS.predicted, "line-width": 2, "line-dasharray": [2, 1.5], "line-opacity": ["case", ["get", "weak"], 0.45, 0.9] },
     });
     map.addLayer({
       id: "observed", type: "line", source: "observed",
@@ -320,7 +330,7 @@
       const pos = pr ? [pr.path[0][1], pr.path[0][0]] : [last.lon, last.lat];
       if (pr) {
         // пунктир от последней фиксации: значок дрона едет по нему между обновлениями
-        predicted.push(line([[last.lon, last.lat], ...pr.path.map(([la, lo]) => [lo, la])], {}));
+        predicted.push(line([[last.lon, last.lat], ...pr.path.map(([la, lo]) => [lo, la])], { weak: pr.basis === "inland" }));
       }
       seen.add(tr.id);
       placeDrone(tr, pos, pr ? pr.bearing : null, state.now);
@@ -382,6 +392,25 @@
         channels: [...new Set(list.flatMap((m) => m.channels))], updated: Math.max(...list.map((m) => m.updated)),
       });
     }
+    const flows = state.flows || [];
+    map.getSource("flows").setData(fc(flows.flatMap((f) => f.paths.map((p) => line(p.path.map(([la, lo]) => [lo, la]), { kind: p.kind })))));
+    const flowEnds = flows.flatMap((f) => f.paths.map((p, i) => ({ f, i, kind: p.kind, path: p.path })))
+      .filter((x) => x.kind === "branch" || x.i === x.f.paths.findLastIndex((q) => q.kind === "main") && !x.f.paths.some((q) => q.kind === "branch"));
+    syncMarkers(flowArrowMarkers, flowEnds, (x) => `${x.f.id}/${x.i}`, flowArrowEl, (el, x) => {
+      const [[la1, lo1], [la2, lo2]] = x.path.slice(-2);
+      const deg = Math.atan2((lo2 - lo1) * Math.cos(((la1 + la2) / 2) * Math.PI / 180), la2 - la1) * 180 / Math.PI;
+      el.firstChild.style.transform = `rotate(${deg}deg)`;
+      return flowPopup(x.f, state.now);
+    }, (x) => { const [la, lo] = x.path[x.path.length - 1]; return [lo, la]; });
+    syncMarkers(flowChipMarkers, flows.filter((f) => f.paths.length), (f) => f.id, flowChipEl, (el, f) => {
+      el.textContent = f.count ? `≈${f.count} БПЛА` : "массово";
+      return flowPopup(f, state.now);
+    }, (f) => {
+      const path = (f.paths.find((p) => p.kind === "main") || f.paths[0]).path;
+      const k = Math.max(0, Math.floor((path.length - 1) / 2));
+      const [a, b] = [path[k], path[k + 1] || path[k]];
+      return [(a[1] + b[1]) / 2, (a[0] + b[0]) / 2];
+    });
     syncMarkers(alertMarkers, [...marks, ...aggs], (a) => (a.agg ? `agg/${a.region}` : a.district || a.region), alertMarkEl, (el, a) => {
       // className не перезаписываем: MapLibre держит на элементе свой класс позиционирования
       el.classList.toggle("missile", a.level === "missile");
@@ -430,6 +459,30 @@
   const launchMarkers = new Map();
   const etaMarkers = new Map();
   const forecastMarkers = new Map();
+  const flowArrowMarkers = new Map();
+  const flowChipMarkers = new Map();
+  const flowArrowEl = () => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "flow-arrow";
+    el.setAttribute("aria-label", "Направление массового пролёта");
+    el.innerHTML = `<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1l4.5 9.5L6 8 1.5 10.5z"/></svg>`;
+    return el;
+  };
+  const flowChipEl = () => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "flow-chip";
+    return el;
+  };
+  function flowPopup(f, now) {
+    const list = (a) => a.map(esc).join(", ");
+    return `<div class="pop-title">Массовый пролёт<span class="pop-badge flow">${f.count ? `≈${f.count} БПЛА` : "массово"}</span></div>`
+      + (f.via.length ? `<div class="pop-row">Через: <b>${list(f.via)}</b></div>` : "")
+      + (f.to.length ? `<div class="pop-row">В направлении: <b>${list(f.to)}</b>${f.beyond.length ? `<div class="sub">и далее: ${list(f.beyond)}</div>` : ""}</div>` : "")
+      + `<div class="pop-sub">Коридор по сообщению канала, а не траектория: показывает, куда указывает канал. Обновлено ${ago(f.t, now)}.</div>`
+      + srcLine(f.channels);
+  }
   const forecastArrowEl = () => {
     const el = document.createElement("button");
     el.type = "button";
@@ -526,10 +579,11 @@
     el.setAttribute("aria-label", bearing == null ? `Цель #${tr.id}, курс неизвестен` : `Цель #${tr.id}`);
     el.querySelector("svg").style.transform = `rotate(${bearing ?? 0}deg)`;
     el.classList.toggle("no-course", bearing == null);
+    el.classList.toggle("weak", !!tr.prediction && tr.prediction.basis === "inland");   // курс вероятный, а не наблюдаемый
     // давно не обновлявшаяся цель бледнеет: скоро она пропадёт с карты
     el.style.opacity = (now - tr.points[tr.points.length - 1].t) > 18 * 60 ? "0.55" : "1";
     el.classList.toggle("engaged", !!tr.engaged);
-    el.querySelector("span").textContent = tr.count > 1 ? `×${tr.count}` : "";
+    el.querySelector("span").textContent = tr.count > 1 ? `×${tr.count}` : tr.mass ? "массово" : "";
     el._html = trackPopup(tr, now);
   }
 
@@ -633,7 +687,7 @@
 
   // Что за сообщение: по самому важному из распознанных событий
   const FEED_LEVELS = [
-    ["missile_alert", "missile", "Ракетная опасность"], ["uav_alert", "uav", "Тревога по БПЛА"], ["uav_warn", "warn", "Внимание"],
+    ["missile_alert", "missile", "Ракетная опасность"], ["flow", "flow", "Массовый пролёт"], ["uav_alert", "uav", "Тревога по БПЛА"], ["uav_warn", "warn", "Внимание"],
     ["clear", "clear", "Отбой"], ["destroyed", "shoot", "Сбитие"], ["engaged", "shoot", "Работа ПВО"],
     ["sighting", "sight", "Фиксация БПЛА"], ["heading", "sight", "Курс БПЛА"], ["launch", "launch", "Пуск"],
   ];
