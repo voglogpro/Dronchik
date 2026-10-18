@@ -89,12 +89,12 @@ def state() -> JSONResponse:
 
 @app.get("/api/regions")
 def regions() -> FileResponse:
-    return FileResponse(ROOT / "data" / "regions.geojson", media_type="application/geo+json")
+    return FileResponse(ROOT / "geodata" / "regions.geojson", media_type="application/geo+json")
 
 
 @app.get("/api/districts")
 def districts() -> FileResponse:
-    return FileResponse(ROOT / "data" / "districts.geojson", media_type="application/geo+json")
+    return FileResponse(ROOT / "geodata" / "districts.geojson", media_type="application/geo+json")
 
 
 @app.get("/api/places")

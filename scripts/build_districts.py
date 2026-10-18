@@ -1,4 +1,4 @@
-"""Собирает data/districts.geojson: муниципальные районы и округа выбранных (приграничных) областей.
+"""Собирает geodata/districts.geojson: муниципальные районы и округа выбранных (приграничных) областей.
 
 Источник: https://github.com/timurkanaz/Russia_geojson_OSM (OpenStreetMap, admin_level=6, ODbL).
 Использование:
@@ -50,7 +50,7 @@ def main(src: str, regions: list[str]) -> None:
     src_dir = Path(src) / "GeoJson's" / "Regions"
     region_names = {
         f["properties"]["id"]: f["properties"]["name"]
-        for f in json.loads((ROOT / "data" / "regions.geojson").read_text(encoding="utf-8"))["features"]
+        for f in json.loads((ROOT / "geodata" / "regions.geojson").read_text(encoding="utf-8"))["features"]
     }
     features, used = [], set()
     for rid in regions:
@@ -75,7 +75,7 @@ def main(src: str, regions: list[str]) -> None:
         print(f"{rname}: {len(raw['features'])}")
     text = json.dumps({"type": "FeatureCollection", "features": features}, ensure_ascii=False, separators=(",", ":"))
     text = re.sub(r"(-?\d+\.\d{3})\d+", r"\1", text)
-    (ROOT / "data" / "districts.geojson").write_text(text, encoding="utf-8")
+    (ROOT / "geodata" / "districts.geojson").write_text(text, encoding="utf-8")
     print(f"всего {len(features)} районов, {len(text) // 1024} КБ")
 
 

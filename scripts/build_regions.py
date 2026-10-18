@@ -1,4 +1,4 @@
-"""Собирает упрощённый data/regions.geojson из исходного файла границ регионов.
+"""Собирает упрощённый geodata/regions.geojson из исходного файла границ регионов.
 
 Источник по умолчанию: https://github.com/codeforamerica/click_that_hood (russia.geojson).
 Использование: python scripts/build_regions.py путь/к/russia.geojson
@@ -35,7 +35,7 @@ def main(src: str) -> None:
     text = json.dumps(out, ensure_ascii=False, separators=(",", ":"))
     # округляем координаты до 3 знаков (~100 м)
     text = re.sub(r"(-?\d+\.\d{3})\d+", r"\1", text)
-    (ROOT / "data" / "regions.geojson").write_text(text, encoding="utf-8")
+    (ROOT / "geodata" / "regions.geojson").write_text(text, encoding="utf-8")
     print(f"{len(features)} регионов, {len(text) // 1024} КБ")
 
 

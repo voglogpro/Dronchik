@@ -15,7 +15,8 @@ from shapely.prepared import prep
 
 from .geo import haversine_km
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+# справочники только для чтения; data/ — для изменяемых файлов (база, сессия), её хостинги часто монтируют как хранилище
+DATA_DIR = Path(__file__).resolve().parent.parent / "geodata"
 
 LETTER = "а-яёa-z"
 VOWEL_ENDINGS = "аеиоуыэюяьй"

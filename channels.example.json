@@ -2,5 +2,5 @@
   {"channel": "vrv_radar", "region": null, "note": "пример общероссийского канала мониторинга — проверьте актуальность"},
   {"channel": "locatorru", "region": null, "note": "пример — проверьте актуальность"},
   {"channel": "example_kursk_channel", "region": "kursk-oblast", "enabled": false,
-   "note": "региональный канал: region — id из data/regions.geojson; используется, когда в сообщении не указан регион (например, «Отбой»)"}
+   "note": "региональный канал: region — id из geodata/regions.geojson; используется, когда в сообщении не указан регион (например, «Отбой»)"}
 ]
