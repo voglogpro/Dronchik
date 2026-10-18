@@ -37,3 +37,4 @@ def test_ingest_and_state(monkeypatch, tmp_path):
         heat = client.get("/api/heatmap?days=7").json()
         assert heat["total"] >= 1 and heat["points"][0]["place"] == "Курчатов"
         assert client.get("/quotes.json").json()["items"]
+        assert client.get("/api/health").json()["mode"] == "none"

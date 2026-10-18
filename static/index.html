@@ -36,6 +36,8 @@
     </form>
   </div>
 
+  <div id="health-bar" class="health-bar" role="status" hidden></div>
+
   <aside id="panel" aria-label="Обстановка">
     <header class="panel-head" id="panel-head">
       <div class="brand">
@@ -63,6 +65,11 @@
         <div id="my-region-status" class="my-status" hidden></div>
         <button id="notify-btn" class="btn" hidden>Включить уведомления</button>
       </section>
+
+      <details id="forecast" class="forecast" hidden>
+        <summary>Прогноз обстановки <span id="forecast-meta" class="sub"></span></summary>
+        <p id="forecast-text"></p>
+      </details>
 
       <section>
         <h2>Регионы под угрозой</h2>

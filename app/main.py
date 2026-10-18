@@ -83,7 +83,7 @@ async def lifespan(_: FastAPI):
         elif settings.web_enabled:
             names = [c["channel"].lstrip("@") for c in settings.channels]
             tasks.append(asyncio.create_task(run_web_channels(
-                names, on_message, settings.poll_interval, settings.history_hours * 3600)))
+                names, on_message, settings.poll_interval, settings.history_hours * 3600, engine.health)))
         else:
             log.warning("каналы не заданы — данные будут только через POST /api/ingest")
     yield
@@ -102,6 +102,15 @@ def state() -> JSONResponse:
 @app.get("/api/regions")
 def regions() -> FileResponse:
     return FileResponse(ROOT / "geodata" / "regions.geojson", media_type="application/geo+json")
+
+
+@app.get("/api/health")
+def health() -> dict:
+    """Есть ли связь с каналами: когда каждый последний раз прочитан и с какой ошибкой."""
+    chans = engine.health.get("channels", {})
+    ok = [c for c, st in chans.items() if st.get("ok")]
+    return {"mode": "demo" if settings.demo else engine.health.get("source", "telegram" if settings.telegram_enabled else "none"),
+            "channels_ok": len(ok), "channels_total": len(chans), "channels": chans, "now": time.time()}
 
 
 @app.get("/api/heatmap")

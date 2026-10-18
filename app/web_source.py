@@ -93,9 +93,13 @@ async def poll_channel(client: httpx.AsyncClient, channel: str, last_seen: dict[
 
 
 async def run_web_channels(channels: list[str], on_message: OnMessage, interval: float = 30.0,
-                           history_s: float = 3 * 3600) -> None:
+                           history_s: float = 3 * 3600, health: dict | None = None) -> None:
+    """health — общий словарь состояния: когда каждый канал последний раз прочитан и какая была ошибка.
+    По нему сайт показывает, есть ли связь с Telegram (иначе «пусто» выглядело бы как «угроз нет»)."""
     last_seen: dict[str, int] = {}
     backoff: dict[str, float] = {}
+    health = health if health is not None else {}
+    health.update({"source": "t.me/s", "interval": interval, "channels": {ch: {"ok": None} for ch in channels}})
     async with httpx.AsyncClient(headers=HEADERS, timeout=20, follow_redirects=True) as client:
         log.info("читаем %d каналов через t.me/s каждые %d с", len(channels), interval)
         while True:
@@ -104,12 +108,15 @@ async def run_web_channels(channels: list[str], on_message: OnMessage, interval:
             for channel in channels:
                 if backoff.get(channel, 0) > time.monotonic():
                     continue
+                state = health["channels"][channel]
                 try:
                     await poll_channel(client, channel, last_seen, on_message, history_s)
                     backoff.pop(channel, None)
+                    state.update(ok=True, last_ok=time.time(), error=None)
                 except Exception as exc:
                     # временная ошибка или лимит t.me — пропускаем канал на пару минут
                     log.warning("канал %s: %s", channel, exc)
                     backoff[channel] = time.monotonic() + 120 + random.uniform(0, 60)
+                    state.update(ok=False, last_error=time.time(), error=f"{type(exc).__name__}: {exc}"[:200])
                 await asyncio.sleep(step * random.uniform(0.6, 1.0))
             await asyncio.sleep(max(0.0, interval - (time.monotonic() - started)))

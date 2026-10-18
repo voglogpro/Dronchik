@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from .gazetteer import Gazetteer, normalize
 from .launches import RX_LAUNCH, LaunchBoard, LaunchDetector
-from .parser import CLEAR, DESTROYED, ENGAGED, HEADING, MISSILE_ALERT, SIGHTING, UAV_ALERT, MessageParser
+from .parser import RX_FORECAST, CLEAR, DESTROYED, ENGAGED, HEADING, MISSILE_ALERT, SIGHTING, UAV_ALERT, MessageParser
 from .tracker import TRACK_TTL_S, Tracker
 
 UAV_ALERT_TTL_S = 2 * 3600       # каналы часто забывают писать «отбой»
@@ -15,6 +15,7 @@ DISTRICT_ALERT_TTL_S = 50 * 60   # район подсвечиваем, пока
 PREDICT_WARN_MINUTES = 60        # регион «жёлтый», если прогноз заходит в него в течение часа
 DISTRICT_PREDICT_WARN_MINUTES = 30  # для районов горизонт короче, иначе жёлтым красится полобласти
 SHOOTDOWN_SHOW_S = 40 * 60       # сколько показывать отметку сбития
+FORECAST_SHOW_S = 14 * 3600      # «прогноз на ночь» актуален до утра
 ENGAGED_SHOW_S = 10 * 60         # «под прицелом ПВО» — пока свежие сообщения о работе ПВО
 
 @dataclass
@@ -64,9 +65,16 @@ class Engine:
         self.district_alerts: dict[str, RegionAlert] = {}
         self.feed: deque[dict] = deque(maxlen=60)
         self.shootdowns: deque[dict] = deque(maxlen=200)
+        self.forecast: dict | None = None   # последний «прогноз обстановки» канала — только текстом
+        self.health: dict = {}              # состояние источника (заполняет web_source)
         self.version = 0
 
     def process(self, channel: str, text: str, t: float, msg_id: int | None = None) -> list:
+        if RX_FORECAST.search(normalize(text)):
+            if not self.forecast or t >= self.forecast["t"]:
+                self.forecast = {"t": t, "channel": channel, "msg_id": msg_id, "text": text.strip()[:1500]}
+                self.version += 1
+            return []
         launch = self.launch_detector.parse(text, t, channel)
         if launch:
             self.launches.add(launch)
@@ -233,6 +241,8 @@ class Engine:
         return {"now": now, "version": self.version, "regions": regions, "districts": districts,
                 "tracks": tracks, "shootdowns": shootdowns, "alert_marks": self._alert_marks(now),
                 "launches": launches if pub.launches else [],
+                "forecast": self.forecast if self.forecast and now - self.forecast["t"] <= FORECAST_SHOW_S else None,
+                "health": self.health,
                 "feed": list(self.feed) if pub.feed else [], "publish": pub.__dict__}
 
     def _alert_marks(self, now: float) -> list[dict]:

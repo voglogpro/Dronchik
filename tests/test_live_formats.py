@@ -191,3 +191,21 @@ def test_fetch_since_paginates_back_until_window():
         assert [p[0] for p in posts] == [96, 97, 98, 99, 100] and len(client.urls) == 1
     finally:
         web_source.asyncio.sleep = real_sleep
+
+
+FORECAST = """⚠️ ПРОГНОЗ ОБСТАНОВКИ на ночь с 18 на 19 октября
+
+В предстоящую ночь ожидается ориентировочно до 1000 единиц вражеских БПЛА.
+
+Основные векторы прорыва:
+▶️ Брянская область → Калужская/Смоленская область, далее в тыловые районы.
+▶️ Белгородская область → Воронежская →Липецкпя, Тульская,Рязанская и далее в тыловые районы."""
+
+
+def test_forecast_is_a_note_not_alerts(gaz, parser):
+    assert parser.parse(FORECAST) == []
+    e = Engine(gaz)
+    e.process("radar_lipetskk", FORECAST, T0, 1)
+    snap = e.snapshot(T0 + 60)
+    assert snap["regions"] == {} and snap["tracks"] == []
+    assert snap["forecast"]["channel"] == "radar_lipetskk"

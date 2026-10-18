@@ -381,6 +381,39 @@
     return html;
   }
 
+  // Связь с каналами: «пусто на карте» не должно выглядеть как «угроз нет», если данные просто не приходят
+  function renderHealth(state) {
+    const bar = $("health-bar");
+    const chans = Object.values((state.health && state.health.channels) || {});
+    if (cfg.demo || !chans.length) {
+      bar.hidden = true;
+      $("status-line").textContent = `${cfg.demo ? "ДЕМО · " : ""}обновлено ${hhmm(state.now)}`;
+      return;
+    }
+    const ok = chans.filter((c) => c.ok);
+    const lastOk = Math.max(0, ...chans.map((c) => c.last_ok || 0));
+    const interval = (state.health && state.health.interval) || 30;
+    const staleMin = lastOk ? Math.round((state.now - lastOk) / 60) : null;
+    $("status-line").textContent = `${ok.length ? "онлайн" : "нет связи"} · ${ok.length}/${chans.length} каналов · обновлено ${hhmm(state.now)}`;
+    if (!ok.length && chans.some((c) => c.ok === false)) {
+      const err = chans.find((c) => c.error);
+      bar.className = "health-bar";
+      bar.textContent = `Нет связи с Telegram-каналами — карта не обновляется${staleMin != null ? ` (последние данные ${staleMin} мин назад)` : ""}.`
+        + (err ? ` Ошибка: ${err.error}` : "");
+      bar.hidden = false;
+    } else if (lastOk && state.now - lastOk > interval * 6) {
+      bar.className = "health-bar stale";
+      bar.textContent = `Каналы давно не читались (${staleMin} мин) — данные могут быть устаревшими.`;
+      bar.hidden = false;
+    } else if (ok.length && ok.length < chans.length / 2) {
+      bar.className = "health-bar stale";
+      bar.textContent = `Читается только ${ok.length} из ${chans.length} каналов — часть сообщений может не попасть на карту.`;
+      bar.hidden = false;
+    } else {
+      bar.hidden = true;
+    }
+  }
+
   function renderPanel(state) {
     // слои, выключенные на сервере (PUBLISH_*), убираем и из легенды
     const pub = state.publish || {};
@@ -433,8 +466,14 @@
       <li><div class="row"><a class="sub src" href="${tgLink(m.channel, m.msg_id)}" target="_blank" rel="noopener">@${esc(m.channel)}</a><span class="sub">${hhmm(m.t)}</span></div>
       <div class="text">${esc(m.text)}</div></li>`).join("") : `<li class="empty">Сообщений пока нет</li>`;
 
-    const live = cfg.channels && cfg.channels.length && !cfg.demo;
-    $("status-line").textContent = `${cfg.demo ? "ДЕМО · " : live ? `онлайн · ${cfg.channels.length} каналов · ` : ""}обновлено ${hhmm(state.now)}`;
+    renderHealth(state);
+
+    const fc_ = state.forecast;
+    $("forecast").hidden = !fc_;
+    if (fc_) {
+      $("forecast-meta").innerHTML = `· <a href="${tgLink(fc_.channel, fc_.msg_id)}" target="_blank" rel="noopener">@${esc(fc_.channel)}</a>, ${hhmm(fc_.t)}`;
+      $("forecast-text").textContent = fc_.text;
+    }
   }
 
   $("alert-list").addEventListener("click", (e) => {

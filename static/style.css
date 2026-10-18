@@ -218,3 +218,17 @@ hr.sep { border: 0; border-top: 1px solid var(--panel-border); margin: 8px 0; }
 .quote blockquote { margin: 0; font-size: 14px; line-height: 1.45; color: var(--text); }
 .quote figcaption { margin-top: 6px; font-size: 12px; color: var(--muted); }
 .quote figcaption:empty { display: none; }
+
+/* нет связи с каналами — видно поверх карты даже при свёрнутой панели */
+.health-bar {
+  position: fixed; z-index: 4; left: 50%; transform: translateX(-50%);
+  top: calc(12px + env(safe-area-inset-top, 0px)); max-width: calc(100% - 24px); box-sizing: border-box;
+  padding: 8px 14px; border-radius: 10px; font-size: 13px; line-height: 1.35; text-align: center;
+  background: rgba(229, 72, 77, .92); color: #fff; box-shadow: 0 6px 20px rgba(0, 0, 0, .4);
+}
+.health-bar.stale { background: rgba(245, 194, 76, .95); color: #1a1404; }
+@media (max-width: 720px) { .health-bar { top: calc(56px + env(safe-area-inset-top, 0px)); } }
+
+.forecast { margin-top: 16px; background: rgba(255, 255, 255, .035); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+.forecast summary { cursor: pointer; font-weight: 600; }
+.forecast p { white-space: pre-wrap; margin: 8px 0 0; color: #cfd5de; line-height: 1.45; }
