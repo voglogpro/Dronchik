@@ -55,6 +55,7 @@ async def broadcast() -> None:
 async def on_message(channel: str, msg_id: int, t: float, text: str) -> None:
     if store and not store.add(channel, msg_id, t, text):
         return
+    heatmap.invalidate()
     if engine.process(channel, text, t, msg_id):
         await broadcast()
 

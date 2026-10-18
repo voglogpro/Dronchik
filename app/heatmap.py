@@ -57,6 +57,10 @@ class Heatmap:
             self._cache[days] = (time.time(), result)
         return result
 
+    def invalidate(self) -> None:
+        """Пришло новое сообщение — следующий запрос пересчитает карту (разобранное уже закэшировано)."""
+        self._cache.clear()
+
     def _sightings(self, channel: str, msg_id: int, text: str) -> list[tuple[str, float, float, int]]:
         key = (channel, msg_id)
         if key not in self._parsed:
