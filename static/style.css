@@ -182,3 +182,23 @@ hr.sep { border: 0; border-top: 1px solid var(--panel-border); margin: 8px 0; }
   .legend:not(.open) span { display: none; }
   .legend.open .legend-toggle { width: 100%; text-align: left; }
 }
+
+/* окно согласия с условиями при первом входе */
+.consent {
+  position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
+  padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px))
+           max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  background: rgba(6, 8, 11, .78); backdrop-filter: blur(4px);
+}
+.consent-card {
+  width: 100%; max-width: 30rem; max-height: 100%; overflow-y: auto; box-sizing: border-box;
+  background: var(--panel); border: 1px solid var(--panel-border); border-radius: var(--radius);
+  padding: 20px; box-shadow: 0 12px 40px rgba(0, 0, 0, .5);
+}
+.consent-card h2 { font-size: 18px; text-transform: none; letter-spacing: 0; color: var(--text); margin: 0 0 12px; }
+.consent-card ul { margin: 0 0 16px; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 1.45; color: #cfd5de; }
+.consent-check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; line-height: 1.4; cursor: pointer; }
+.consent-check input { width: 18px; height: 18px; margin: 1px 0 0; flex: none; accent-color: var(--accent); }
+.consent-card a, .disclaimer a { color: var(--accent); }
+.btn.primary { margin-top: 16px; background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.btn.primary:disabled { opacity: .45; cursor: not-allowed; }

@@ -34,6 +34,9 @@ class Settings:
     history_hours: float = 3.0
     poll_interval: float = 30.0   # как часто перечитывать каналы через t.me/s, секунды
     publish: dict = field(default_factory=dict)  # PUBLISH_* — что показывать на сайте
+    terms_version: str = "2026-10-18"  # смена значения заново показывает окно согласия всем
+    operator: str = ""
+    contact: str = ""
 
     @property
     def telegram_enabled(self) -> bool:
@@ -72,6 +75,9 @@ def load_settings() -> Settings:
         history_hours=float(os.environ.get("HISTORY_HOURS", "3")),
         poll_interval=float(os.environ.get("POLL_INTERVAL", "30")),
         publish={key: _flag(f"PUBLISH_{key.upper()}") for key in ("tracks", "air_defense", "launches", "feed")},
+        terms_version=os.environ.get("TERMS_VERSION", "2026-10-18"),
+        operator=os.environ.get("OPERATOR_NAME", ""),
+        contact=os.environ.get("OPERATOR_CONTACT", ""),
     )
     demo = os.environ.get("DEMO", "auto").lower()
     s.demo = demo in ("1", "true", "yes") or (demo == "auto" and not s.channels)

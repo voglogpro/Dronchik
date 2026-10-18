@@ -12,6 +12,27 @@
 <body>
   <div id="map"></div>
 
+  <div id="consent" class="consent" role="dialog" aria-modal="true" aria-labelledby="consent-title" hidden>
+    <form id="consent-form" class="consent-card">
+      <h2 id="consent-title">Прежде чем открыть карту</h2>
+      <ul>
+        <li>Дрончик автоматически собирает сообщения <b>открытых Telegram-каналов</b>. Это не официальный источник
+          и не система оповещения, сервис не связан с МЧС и органами власти.</li>
+        <li>Данные бывают <b>неполными, ошибочными и запаздывают</b>. Маршруты и время подлёта — приблизительная оценка.
+          Отсутствие отметки не значит, что опасности нет.</li>
+        <li>При угрозе действуйте <b>по указаниям МЧС и властей</b> вашего региона.</li>
+        <li>Во многих регионах запрещено распространять сведения о БПЛА и работе ПВО. <b>Не пересылайте</b>
+          и не публикуйте данные с карты, если это запрещено там, где вы находитесь.</li>
+      </ul>
+      <label class="consent-check">
+        <input type="checkbox" id="consent-accept" required>
+        <span>Мне есть 18 лет, я прочитал(а) и принимаю
+          <a href="terms.html" target="_blank" rel="noopener">пользовательское соглашение</a></span>
+      </label>
+      <button type="submit" id="consent-submit" class="btn primary" disabled>Принять и открыть карту</button>
+    </form>
+  </div>
+
   <aside id="panel" aria-label="Обстановка">
     <header class="panel-head" id="panel-head">
       <div class="brand">
@@ -67,7 +88,7 @@
         <ul id="sources" class="list sources"></ul>
       </section>
 
-      <p class="disclaimer">
+      <p class="disclaimer"><a href="terms.html" target="_blank" rel="noopener">Пользовательское соглашение</a><br>
         Данные собираются автоматически из открытых каналов, могут запаздывать и содержать ошибки.
         Маршрут — вероятностная оценка, а не точное положение цели.
         Ориентируйтесь на официальные сигналы МЧС и региональных властей.

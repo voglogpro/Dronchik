@@ -556,6 +556,24 @@
     $("sources").innerHTML = cfg.channels.map((c) => `<li><a href="${tgLink(c.channel)}" target="_blank" rel="noopener">@${esc(c.channel)}</a>${c.note ? `<div class="sub">${esc(c.note)}</div>` : ""}</li>`).join("");
   }
 
+  // Согласие с условиями: показываем при первом входе и после смены редакции условий
+  (function consent() {
+    const version = cfg.termsVersion || "1";
+    if (store.get("termsAccepted") === version) return;
+    const box = $("consent");
+    box.hidden = false;
+    document.body.classList.add("consent-open");
+    $("consent-accept").addEventListener("change", (e) => { $("consent-submit").disabled = !e.target.checked; });
+    $("consent-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      if (!$("consent-accept").checked) return;
+      store.set("termsAccepted", version);
+      box.hidden = true;
+      document.body.classList.remove("consent-open");
+    });
+    $("consent-accept").focus();
+  })();
+
   $("legend-toggle").addEventListener("click", () => {
     const open = $("legend").classList.toggle("open");
     $("legend-toggle").setAttribute("aria-expanded", String(open));

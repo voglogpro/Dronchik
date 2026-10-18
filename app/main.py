@@ -112,7 +112,8 @@ def places() -> list[dict]:
 @app.get("/config.js")
 def config_js() -> Response:
     cfg = {"maptilerKey": settings.maptiler_key, "maptilerStyle": settings.maptiler_style, "demo": settings.demo,
-           "channels": [{"channel": c["channel"].lstrip("@"), "note": c.get("note", "")} for c in settings.channels]}
+           "channels": [{"channel": c["channel"].lstrip("@"), "note": c.get("note", "")} for c in settings.channels],
+           "termsVersion": settings.terms_version, "operator": settings.operator, "contact": settings.contact}
     return Response(f"window.APP_CONFIG = {json.dumps(cfg)};", media_type="application/javascript")
 
 

@@ -66,6 +66,8 @@ def main(out: str, maplibre_css: str, key: str = "") -> None:
     css = Path(maplibre_css).read_text(encoding="utf-8")
     (out_dir / "style.css").write_text(css + "\n" + (static / "style.css").read_text(encoding="utf-8"), encoding="utf-8")
     (out_dir / "app.js").write_text((static / "app.js").read_text(encoding="utf-8"), encoding="utf-8")
+    (out_dir / "terms.html").write_text((static / "terms.html").read_text(encoding="utf-8"), encoding="utf-8")
+    (out_dir / "config.js").write_text(f"window.APP_CONFIG = {json.dumps(cfg)};", encoding="utf-8")
     (out_dir / "regions.geojson").write_text((ROOT / "geodata" / "regions.geojson").read_text(encoding="utf-8"), encoding="utf-8")
     (out_dir / "districts.geojson").write_text((ROOT / "geodata" / "districts.geojson").read_text(encoding="utf-8"), encoding="utf-8")
     (out_dir / "places.json").write_text(json.dumps(Gazetteer().map_labels(), ensure_ascii=False), encoding="utf-8")

@@ -32,3 +32,5 @@ def test_ingest_and_state(monkeypatch, tmp_path):
         assert client.get("/api/regions").json()["type"] == "FeatureCollection"
         assert "APP_CONFIG" in client.get("/config.js").text
         assert client.get("/").status_code == 200
+        assert "Пользовательское соглашение" in client.get("/terms.html").text
+        assert '"termsVersion"' in client.get("/config.js").text
