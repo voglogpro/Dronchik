@@ -1,4 +1,5 @@
-/* Не зависит от загрузки карты, Telegram SDK и сохранённого согласия. */
+/* Напоминание показывается при каждом входе и не зависит от загрузки карты и Telegram SDK.
+   Галочку согласия просим только до первого принятия текущей редакции условий. */
 (() => {
   "use strict";
   const box = document.getElementById("consent");
@@ -7,14 +8,23 @@
   const submit = document.getElementById("consent-submit");
   const title = document.getElementById("consent-title");
   const reopen = document.getElementById("purpose-open");
+  const check = document.getElementById("consent-check");
+  const note = document.getElementById("consent-note");
+  const version = (window.APP_CONFIG || {}).termsVersion || "1";
+  const accepted = () => { try { return localStorage.getItem("termsAccepted") === version; } catch { return false; } };
   const background = Array.from(document.body.children).filter(el =>
     el !== box && el.tagName !== "SCRIPT" && !el.inert);
   let previousFocus;
 
   function show() {
     previousFocus = document.activeElement;
-    accept.checked = false;
-    submit.disabled = true;
+    const known = accepted();
+    check.hidden = known;
+    note.hidden = !known;
+    accept.required = !known;
+    accept.checked = known;
+    submit.disabled = !known;
+    submit.textContent = known ? "Понятно, открыть карту" : "Принять и открыть карту";
     box.hidden = false;
     document.body.classList.add("consent-open");
     background.forEach(el => { el.inert = true; });
@@ -29,7 +39,7 @@
     document.body.classList.remove("consent-open");
     background.forEach(el => { el.inert = false; });
     // Сохранение согласия не отменяет уведомление при следующем входе.
-    try { localStorage.setItem("termsAccepted", (window.APP_CONFIG || {}).termsVersion || "1"); } catch { /* приватный режим */ }
+    try { localStorage.setItem("termsAccepted", version); } catch { /* приватный режим */ }
     (previousFocus && previousFocus !== document.body ? previousFocus : reopen).focus();
   });
   box.addEventListener("keydown", event => {

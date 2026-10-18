@@ -18,42 +18,42 @@
       <header class="consent-head">
         <span class="logo" aria-hidden="true"></span>
         <div>
-          <p class="consent-kicker">Дрончик · информация для жителей</p>
+          <p class="consent-kicker">Дрончик · для жителей</p>
           <h2 id="consent-title" tabindex="-1">Наша цель — безопасность людей</h2>
         </div>
       </header>
 
-      <p id="consent-purpose" class="consent-mission">Автор создал проект, чтобы помогать жителям России узнавать о сообщениях об опасности и беречь себя и близких.</p>
-      <p class="consent-explanation">Цель проекта — гражданское информирование, а не передача противнику сведений о полётах или содействие боевым действиям. Это заявление о цели автора, а не гарантия того, кто и как использует общедоступный сайт.</p>
+      <p id="consent-purpose" class="consent-mission">Проект помогает жителям России узнавать о сообщениях об опасности и беречь себя и близких.</p>
 
       <ul class="consent-points">
         <li>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/></svg>
-          <div><b>Сообщения из открытых источников.</b> Сервис автоматически читает публичные Telegram-каналы. Открытый канал не обязательно является официальным. Сервис не связан с МЧС и органами власти.
+          <div><b>Карта основана только на публичных Telegram-каналах.</b> Мы не связаны с МЧС, Минобороны и органами власти.
             <details class="consent-sources"><summary>Какие каналы читаем</summary><div id="consent-channels" class="chips"></div></details>
           </div>
         </li>
         <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c3-8 7-12 14-14"/><path d="M15 5h4v4"/></svg>
+          <div><b>Всё, что нарисовано на карте, — анимация.</b> Значки дронов, их движение, линии и время подлёта рассчитаны по текстам сообщений и средней скорости. Это не радар и не настоящее положение объектов.</div>
+        </li>
+        <li>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/></svg>
-          <div><b>Это не радар и не подтверждение положения объекта.</b> Сообщения и их распознавание могут содержать ошибки и задержки. Если включены маршруты и время подлёта, это расчётные предположения. Нет отметки — не значит, что нет опасности.</div>
+          <div><b>Информация может быть ошибочной или устаревшей.</b> Не полагайтесь на карту. Нет отметки — не значит, что нет опасности. Действуйте по сигналам МЧС и властей своего региона.</div>
         </li>
         <li>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/></svg>
-          <div><b>Действуйте по официальным сигналам МЧС и властей.</b> Карта не заменяет государственное оповещение. Не ждите подтверждения на сайте, если получили официальный сигнал.</div>
-        </li>
-        <li>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M6 18L18 6"/></svg>
-          <div><b>Не пересылайте данные с карты</b>, если в вашем регионе запрещено распространять сведения о БПЛА и ПВО.</div>
+          <div><b>Тревожиться не стоит.</b> Большинство отметок — сообщения о возможной угрозе, а не о реальной опасности рядом с вами. Не пересылайте данные с карты, если в вашем регионе это запрещено.</div>
         </li>
       </ul>
       <noscript><p class="consent-explanation">Для открытия карты нужен JavaScript. При угрозе ориентируйтесь на официальные оповещения.</p></noscript>
 
-      <label class="consent-check">
+      <label class="consent-check" id="consent-check">
         <input type="checkbox" id="consent-accept" required>
         <span class="box" aria-hidden="true"></span>
         <span>Мне есть 18 лет, я прочитал(а) и принимаю
           <a href="terms.html" target="_blank" rel="noopener">пользовательское соглашение</a></span>
       </label>
+      <p class="consent-note" id="consent-note" hidden>Вы уже приняли <a href="terms.html" target="_blank" rel="noopener">пользовательское соглашение</a>. Это напоминание показывается при каждом входе.</p>
       <button type="submit" id="consent-submit" class="btn primary" disabled>Принять и открыть карту</button>
     </form>
   </div>
@@ -162,13 +162,15 @@
     <span data-layer="tracks"><i class="sw sw-predicted"></i>Вероятный подлёт ≤ 60 мин</span>
     <span><i class="sw sw-district"></i>Район с фиксацией</span>
     <span><i class="lg-alert">!</i>Опасность, цель не зафиксирована</span>
-    <span data-layer="tracks"><i class="lg-drone"></i>Фиксация БПЛА</span>
+    <span data-layer="tracks"><i class="lg-drone"></i>БПЛА, курс по фиксациям</span>
+    <span data-layer="tracks"><i class="lg-drone-unknown">?</i>БПЛА, одна фиксация — курс неизвестен</span>
     <span data-layer="air_defense"><i class="lg-scope"></i>Работа ПВО</span>
     <span data-layer="air_defense"><i class="lg-shoot"></i>Сбитие</span>
     <span data-layer="launches"><i class="lg-origin"></i>Откуда обычно пуски</span>
+    <span data-layer="tracks"><i class="lg-forecast"></i>Прогноз канала на ночь: ожидаемые направления</span>
     <span data-layer="launches"><i class="ln ln-launch"></i>Пуск и примерный маршрут</span>
     <span data-layer="tracks"><i class="ln ln-obs"></i>Пройденный путь</span>
-    <span data-layer="tracks"><i class="ln ln-pred"></i>Прогноз</span>
+    <span data-layer="tracks"><i class="ln ln-pred"></i>Вероятный путь цели</span>
   </div>
 
   <div id="demo-bar" class="demo-bar" hidden>
@@ -178,10 +180,10 @@
     <button id="demo-restart" type="button">Сначала</button>
   </div>
 
+  <script src="config.js"></script>
   <script src="notice.js"></script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-  <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

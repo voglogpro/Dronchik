@@ -173,3 +173,29 @@ def test_engine_district_alerts(gaz):
     assert any(d["status"] == "predicted" for d in snap["districts"].values())
     e.process("a", "Отбой по Белгородской области", T0 + 900)
     assert not [d for d in e.snapshot(T0 + 910)["districts"].values() if d["status"] != "predicted"]
+
+
+def test_drone_turns_to_region_with_new_alert(gaz):
+    from app.gazetteer import Place
+    from app.geo import angle_diff, bearing_deg, haversine_km
+    engine = Engine(gaz)
+    t0 = 1_700_000_000
+    livny = next(p for p in gaz.places if p.name == "Ливны")
+    track = engine.tracker.add_sighting(Place("Колпна", "oryol-oblast", 52.33, 36.95), t0, "radar")
+    assert engine.tracker.add_sighting(livny, t0 + 20 * 60, "radar") is track
+    assert engine.tracker.predict(track, t0 + 22 * 60).basis == "observed"
+    # тревога позади цели (Курская область) курс не меняет
+    engine.process("radar", "Угроза атаки БПЛА в Курской области", t0 + 22 * 60)
+    assert track.steer is None
+    engine.process("radar", "Угроза атаки БПЛА в Липецкой области", t0 + 25 * 60)
+    pred = engine.tracker.predict(track, t0 + 28 * 60)
+    assert pred.basis == "alert"
+    lat, lon = pred.path[0]
+    clat, clon = gaz.regions["lipetsk-oblast"].center
+    assert angle_diff(pred.bearing, bearing_deg(lat, lon, clat, clon)) < 5
+    # до момента тревоги цель летела прежним курсом — положение не скачет
+    a, b = track.position_at(t0 + 25 * 60 - 1), track.position_at(t0 + 25 * 60 + 1)
+    assert haversine_km(*a, *b) < 1
+    # новая фиксация отменяет поворот
+    engine.process("radar", "БПЛА над Ельцом", t0 + 40 * 60)
+    assert engine.tracker.predict(track, t0 + 41 * 60).basis == "observed"

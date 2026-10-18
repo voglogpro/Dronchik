@@ -4,10 +4,10 @@
   const cfg = window.APP_CONFIG || {};
   const tg = window.Telegram && window.Telegram.WebApp;
   if (tg && tg.initData) { tg.ready(); tg.expand(); document.documentElement.classList.add("tg"); }
-  const COLORS = { missile: "#e5484d", uav: "#f2762e", predicted: "#f5c24c", launch: "#a99cf0" };
+  const COLORS = { missile: "#e5484d", uav: "#f2762e", predicted: "#f5c24c", launch: "#a99cf0", forecast: "#8fb3d9" };
   const LABELS = { missile: "Ракетная опасность", uav: "Угроза БПЛА", predicted: "Вероятный подлёт" };
   const SEVERITY = { missile: 3, uav: 2, predicted: 1 };
-  const BASIS = { target: "по заявленному курсу", observed: "по фиксациям", hint: "по направлению" };
+  const BASIS = { target: "по заявленному курсу", observed: "по фиксациям", hint: "по направлению", alert: "по новой тревоге в соседней области" };
 
   const $ = (id) => document.getElementById(id);
   const eta = (m) => (m <= 1 ? "< 1 мин" : `~${m} мин`);
@@ -144,6 +144,13 @@
       layout: { "line-cap": "round" },
       paint: { "line-color": COLORS.launch, "line-width": 1.6, "line-opacity": ["case", ["get", "arrived"], 0.25, ["get", "named"], 0.75, 0.45], "line-dasharray": [1, 2.5] },
     });
+    // векторы из «прогноза обстановки на ночь» — самый тусклый пунктир, под пусками
+    map.addSource("forecast", { type: "geojson", data: empty() });
+    map.addLayer({
+      id: "forecast-vectors", type: "line", source: "forecast",
+      layout: { "line-cap": "round" },
+      paint: { "line-color": COLORS.forecast, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1.2, 7, 2], "line-opacity": 0.55, "line-dasharray": [2, 3] },
+    }, "launch-routes");
     // тепловая карта пролётов за период — под всеми слоями целей
     map.addSource("heat", { type: "geojson", data: empty() });
     map.addLayer({
@@ -262,7 +269,8 @@
       const last = tr.points[tr.points.length - 1];
       const pos = pr ? [pr.path[0][1], pr.path[0][0]] : [last.lon, last.lat];
       if (pr) {
-        predicted.push(line(pr.path.map(([la, lo]) => [lo, la]), {}));
+        // пунктир от последней фиксации: значок дрона едет по нему между обновлениями
+        predicted.push(line([[last.lon, last.lat], ...pr.path.map(([la, lo]) => [lo, la])], {}));
         cones.push({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [pr.cone.map(([la, lo]) => [lo, la])] } });
       }
       seen.add(tr.id);
@@ -272,7 +280,7 @@
     map.getSource("predicted").setData(fc(predicted));
     map.getSource("observed").setData(fc(observed));
     map.getSource("fixes").setData(fc(fixes));
-    for (const [id, m] of droneMarkers) if (!seen.has(id)) { m.remove(); droneMarkers.delete(id); }
+    for (const [id, m] of droneMarkers) if (!seen.has(id)) { m.remove(); droneMarkers.delete(id); droneMotion.delete(id); }
     const launches = state.launches || [];
     const liveOrigins = new Set(launches.filter((l) => l.origin && !l.planned).map((l) => l.origin));
     document.querySelectorAll(".origin-mark").forEach((el) => el.classList.toggle("live", liveOrigins.has(el.dataset.origin)));
@@ -296,6 +304,20 @@
         const [a, b] = [r.path[r.path.length - 2], r.path[r.path.length - 1]];
         return [(a[1] + b[1]) / 2, (a[0] + b[0]) / 2];
       });
+    const vectors = (state.forecast && state.forecast.vectors) || [];
+    const vname = (id) => id.split(",").map((r) => regionNames[r] || r).join(" и ");
+    map.getSource("forecast").setData(fc(vectors.map((v) => line(v.path.map(([la, lo]) => [lo, la]), {}))));
+    syncMarkers(forecastMarkers, vectors, (v) => `${v.from}>${v.to}`, forecastArrowEl, (el, v) => {
+      const [[la1, lo1], [la2, lo2]] = v.path;
+      const deg = Math.atan2((lo2 - lo1) * Math.cos(((la1 + la2) / 2) * Math.PI / 180), la2 - la1) * 180 / Math.PI;
+      el.firstChild.style.transform = `rotate(${deg}deg)`;
+      return `<b>Прогноз на ночь</b><br>${esc(vname(v.from))} → ${esc(vname(v.to))}`
+        + `<br><span class="sub">Ожидаемое направление по прогнозу <a href="${tgLink(state.forecast.channel, state.forecast.msg_id)}" target="_blank" rel="noopener">@${esc(state.forecast.channel)}</a>, а не фиксация</span>`;
+    }, (v) => {
+      // стрелка ближе к цели, но не на её центре — там значок «!»
+      const [[la1, lo1], [la2, lo2]] = v.path;
+      return [lo1 + (lo2 - lo1) * 0.8, la1 + (la2 - la1) * 0.8];
+    });
     syncMarkers(alertMarkers, state.alert_marks || [], (a) => a.district || a.region, alertMarkEl, (el, a) => {
       // className не перезаписываем: MapLibre держит на элементе свой класс позиционирования
       el.classList.toggle("missile", a.level === "missile");
@@ -340,6 +362,15 @@
   };
   const launchMarkers = new Map();
   const etaMarkers = new Map();
+  const forecastMarkers = new Map();
+  const forecastArrowEl = () => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "fc-arrow";
+    el.setAttribute("aria-label", "Направление из прогноза");
+    el.innerHTML = `<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1l4 9-4-2.2L2 10z"/></svg>`;
+    return el;
+  };
   const launchMarkEl = () => {
     const el = document.createElement("button");
     el.type = "button";
@@ -371,20 +402,57 @@
 
   // Цели рисуем DOM-маркерами: стрелка по курсу, число БПЛА рядом (без загрузки шрифтов для карты)
   const droneMarkers = new Map();
+  // Движение между обновлениями: значок едет по прогнозу с расчётной скоростью цели.
+  // Сервер присылает положение на момент снимка; дальше считаем сами, чтобы не было скачков раз в 15–30 с.
+  const droneMotion = new Map();   // id -> {path: [[lon, lat]...], cum: [км], speed, at}
+  let timeScale = cfg.timeScale || 1;  // в демо время ускорено
+  const kmBetween = ([lo1, la1], [lo2, la2]) => {
+    const k = Math.cos(((la1 + la2) / 2) * Math.PI / 180);
+    return Math.hypot((lo2 - lo1) * k, la2 - la1) * 111.2;
+  };
+  function setMotion(id, pr) {
+    if (!pr || pr.path.length < 2) { droneMotion.delete(id); return; }
+    const path = pr.path.map(([la, lo]) => [lo, la]);
+    const cum = [0];
+    for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + kmBetween(path[i - 1], path[i]));
+    droneMotion.set(id, { path, cum, speed: pr.speed, at: performance.now() });
+  }
+  function motionPos(m, nowMs) {
+    const dist = m.speed * ((nowMs - m.at) / 3.6e6) * timeScale;
+    const { path, cum } = m;
+    if (dist >= cum[cum.length - 1]) return path[path.length - 1];
+    let i = 1;
+    while (cum[i] < dist) i++;
+    const f = (dist - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1);
+    return [path[i - 1][0] + (path[i][0] - path[i - 1][0]) * f, path[i - 1][1] + (path[i][1] - path[i - 1][1]) * f];
+  }
+  let lastFrame = 0;
+  function animateDrones(nowMs) {
+    requestAnimationFrame(animateDrones);
+    if (document.hidden || nowMs - lastFrame < 80) return;
+    lastFrame = nowMs;
+    for (const [id, m] of droneMotion) {
+      const marker = droneMarkers.get(id);
+      if (marker) marker.setLngLat(motionPos(m, nowMs));
+    }
+  }
+  requestAnimationFrame(animateDrones);
+
   function placeDrone(tr, pos, bearing, now) {
     let m = droneMarkers.get(tr.id);
     if (!m) {
       const el = document.createElement("button");
       el.className = "drone";
       el.type = "button";
-      el.innerHTML = `<i class="scope" aria-hidden="true"></i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 18-8-4.5L4 20z"/></svg><span></span>`;
+      el.innerHTML = `<i class="scope" aria-hidden="true"></i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 18-8-4.5L4 20z"/></svg><b class="dot" aria-hidden="true">?</b><span></span>`;
       m = new maplibregl.Marker({ element: el, rotationAlignment: "map" }).setLngLat(pos)
         .setPopup(new maplibregl.Popup({ offset: 14, maxWidth: "280px" })).addTo(map);
       droneMarkers.set(tr.id, m);
     }
     m.setLngLat(pos);
+    setMotion(tr.id, tr.prediction);
     const el = m.getElement();
-    el.setAttribute("aria-label", `Цель #${tr.id}`);
+    el.setAttribute("aria-label", bearing == null ? `Цель #${tr.id}, курс неизвестен` : `Цель #${tr.id}`);
     el.querySelector("svg").style.transform = `rotate(${bearing ?? 0}deg)`;
     el.classList.toggle("no-course", bearing == null);
     el.classList.toggle("engaged", !!tr.engaged);
@@ -597,6 +665,8 @@
   // Статическое демо: заранее посчитанные снимки сценария, проигрываем по кругу
   async function playTimeline(url) {
     const frames = await (await fetch(url)).json();
+    const FRAME_MS = 700;
+    timeScale = frames.length > 1 ? ((frames[1].now - frames[0].now) * 1000) / FRAME_MS : 1;
     const bar = $("demo-bar");
     let i = 0, paused = false;
     if (bar) {
@@ -616,7 +686,7 @@
       }
     }
     step();
-    setInterval(() => { if (!paused) { i = (i + 1) % frames.length; step(); } }, 700);
+    setInterval(() => { if (!paused) { i = (i + 1) % frames.length; step(); } }, FRAME_MS);
   }
 
   let retry = 1000, pollTimer = null;

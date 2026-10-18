@@ -3,28 +3,23 @@
 Источник: https://github.com/timurkanaz/Russia_geojson_OSM (OpenStreetMap, admin_level=6, ODbL).
 Использование:
   python scripts/build_districts.py путь/к/Russia_geojson_OSM [id-региона ...]
-Без списка регионов берутся все регионы, для которых есть файл районов; у приграничных (BORDER_REGIONS)
-контуры точнее, у остальных грубее, чтобы файл оставался небольшим.
+Без списка регионов берутся все регионы, для которых есть файл районов.
+Все районы упрощаются вместе (coverage_simplify): общая граница соседей остаётся одной линией,
+а контур области собирается из её районов — на карте нет двойных линий.
 """
 import json
 import re
 import sys
 from pathlib import Path
 
-from shapely.geometry import shape
+from shapely import coverage_simplify, make_valid
+from shapely.geometry import MultiPolygon, Polygon, shape
+from shapely.ops import unary_union
 
-from boundary_geometry import export_geometry
+from boundary_geometry import export_geometry, polygonal_geometry
 
 ROOT = Path(__file__).resolve().parent.parent
-TOLERANCE = 0.004  # ~300-400 м, достаточно для раскраски районов
-TOLERANCE_FAR = 0.012  # ~1 км для областей вдали от границы
-
-# приграничные области и ближайшие к ним, куда чаще всего долетают БПЛА
-BORDER_REGIONS = [
-    "belgorod-oblast", "kursk-oblast", "bryansk-oblast", "voronezh-oblast", "rostov-oblast",
-    "krasnodar-krai", "smolensk-oblast", "oryol-oblast", "lipetsk-oblast", "kaluga-oblast",
-    "tula-oblast", "moscow-oblast",
-]
+TOLERANCE = 0.016  # градусы; ~3,5 МБ на все районы России, для раскраски достаточно
 
 TRANSLIT = str.maketrans({
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh", "з": "z", "и": "i",
@@ -65,7 +60,7 @@ def main(src: str, regions: list[str]) -> None:
     }
     files = {norm(p.name.split("_")[0]): p for p in src_dir.glob("*/*.geojson")}
     explicit = bool(regions)
-    features, used = [], set()
+    features, raw_geoms, used = [], [], set()
     for rid in regions or list(region_names):
         rname = region_names[rid]
         path = files.get(norm(rname))
@@ -74,7 +69,6 @@ def main(src: str, regions: list[str]) -> None:
                 raise SystemExit(f"нет файла районов для {rname}")
             print(f"{rname}: нет файла районов, пропускаю")
             continue
-        tolerance = TOLERANCE if rid in BORDER_REGIONS else TOLERANCE_FAR
         raw = json.loads(path.read_text(encoding="utf-8"))
         for f in raw["features"]:
             name = f["properties"]["district"]
@@ -82,17 +76,44 @@ def main(src: str, regions: list[str]) -> None:
             if did in used:
                 continue
             used.add(did)
-            geom = export_geometry(shape(f["geometry"]), tolerance)
+            raw_geoms.append(make_valid(shape(f["geometry"])))
             features.append({
                 "type": "Feature",
                 "id": did,
                 "properties": {"id": did, "name": display_name(name), "raw": name, "region": rid},
-                "geometry": geom,
             })
         print(f"{rname}: {len(raw['features'])}")
+    for f, geom in zip(features, coverage_simplify(raw_geoms, TOLERANCE)):
+        f["geometry"] = export_geometry(geom, 0)
     text = json.dumps({"type": "FeatureCollection", "features": features}, ensure_ascii=False, separators=(",", ":"))
     (ROOT / "geodata" / "districts.geojson").write_text(text, encoding="utf-8")
     print(f"всего {len(features)} районов, {len(text) // 1024} КБ")
+    align_regions(features)
+
+
+SLIVER_DEG2 = 0.01  # дыры меньше этого — щели между упрощёнными районами; Москва внутри области больше
+
+
+def align_regions(districts: list[dict]) -> None:
+    """Контур области = объединение её районов, иначе граница области и крайних районов
+    (упрощённые по отдельности) расходятся на километр-два и на карте видны двойные линии."""
+    path = ROOT / "geodata" / "regions.geojson"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    by_region: dict[str, list] = {}
+    for f in districts:
+        by_region.setdefault(f["properties"]["region"], []).append(shape(f["geometry"]))
+    for f in data["features"]:
+        parts = by_region.get(f["properties"]["id"])
+        if not parts:
+            continue
+        merged = polygonal_geometry(unary_union(parts).buffer(0))
+        polys = merged.geoms if isinstance(merged, MultiPolygon) else [merged]
+        cleaned = [Polygon(p.exterior, [r for r in p.interiors if Polygon(r).area >= SLIVER_DEG2]) for p in polys]
+        geom = cleaned[0] if len(cleaned) == 1 else MultiPolygon(cleaned)
+        f["geometry"] = export_geometry(geom, 0)
+    text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    path.write_text(text, encoding="utf-8")
+    print(f"границы {len(by_region)} областей выровнены по районам, regions.geojson {len(text) // 1024} КБ")
 
 
 if __name__ == "__main__":

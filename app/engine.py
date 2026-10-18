@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 
+from .forecast import ForecastParser
 from .gazetteer import Gazetteer, normalize
 from .launches import RX_LAUNCH, LaunchBoard, LaunchDetector
 from .parser import RX_FORECAST, CLEAR, DESTROYED, ENGAGED, HEADING, MISSILE_ALERT, SIGHTING, UAV_ALERT, MessageParser
@@ -59,20 +60,22 @@ class Engine:
         self.launch_detector = LaunchDetector(gazetteer)
         self.launches = LaunchBoard()
         self.parser = MessageParser(gazetteer)
+        self.forecast_parser = ForecastParser(gazetteer)
         self.tracker = Tracker(gazetteer)
         self.channel_regions = channel_regions or {}
         self.alerts: dict[str, RegionAlert] = {}
         self.district_alerts: dict[str, RegionAlert] = {}
         self.feed: deque[dict] = deque(maxlen=60)
         self.shootdowns: deque[dict] = deque(maxlen=200)
-        self.forecast: dict | None = None   # последний «прогноз обстановки» канала — только текстом
+        self.forecast: dict | None = None   # последний «прогноз обстановки» канала: текст и векторы направлений
         self.health: dict = {}              # состояние источника (заполняет web_source)
         self.version = 0
 
     def process(self, channel: str, text: str, t: float, msg_id: int | None = None) -> list:
         if RX_FORECAST.search(normalize(text)):
             if not self.forecast or t >= self.forecast["t"]:
-                self.forecast = {"t": t, "channel": channel, "msg_id": msg_id, "text": text.strip()[:1500]}
+                self.forecast = {"t": t, "channel": channel, "msg_id": msg_id, "text": text.strip()[:1500],
+                                 "vectors": self.forecast_parser.vectors(text)}
                 self.version += 1
             return []
         launch = self.launch_detector.parse(text, t, channel)
@@ -101,8 +104,12 @@ class Engine:
             elif ev.kind in (UAV_ALERT, MISSILE_ALERT):
                 status = "missile" if ev.kind == MISSILE_ALERT else "uav"
                 for rid in ev.region_ids:
+                    if status == "uav" and "uav" not in getattr(self.alerts.get(rid), "levels", {}):
+                        self.tracker.steer_to_alert(rid, t)
                     self._raise(self.alerts, rid, status, t, channel, announced=True)
                 for did in ev.district_ids:
+                    if status == "uav" and "uav" not in getattr(self.district_alerts.get(did), "levels", {}):
+                        self.tracker.steer_to_alert(did, t)
                     self._raise(self.district_alerts, did, status, t, channel, announced=True)
             elif ev.kind == SIGHTING:
                 self.tracker.add_sighting(ev.place, t, channel, ev.count, ev.target, ev.bearing)
@@ -238,10 +245,13 @@ class Engine:
                 item["engaged"] = False
         if not pub.tracks:
             tracks = []
+        forecast = self.forecast if self.forecast and now - self.forecast["t"] <= FORECAST_SHOW_S else None
+        if forecast and not pub.tracks:
+            forecast = {**forecast, "vectors": []}  # направления — те же «маршруты», под тем же флагом
         return {"now": now, "version": self.version, "regions": regions, "districts": districts,
                 "tracks": tracks, "shootdowns": shootdowns, "alert_marks": self._alert_marks(now),
                 "launches": launches if pub.launches else [],
-                "forecast": self.forecast if self.forecast and now - self.forecast["t"] <= FORECAST_SHOW_S else None,
+                "forecast": forecast,
                 "health": self.health,
                 "feed": list(self.feed) if pub.feed else [], "publish": pub.__dict__}
 

@@ -11,6 +11,7 @@ import logging
 import time
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -92,6 +93,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Дрончик — карта БПЛА", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=2048)  # границы районов: 3,5 МБ → ~0,9 МБ
 
 
 @app.get("/api/state")
@@ -144,7 +146,7 @@ def places() -> list[dict]:
 
 @app.get("/config.js")
 def config_js() -> Response:
-    cfg = {"maptilerKey": settings.maptiler_key, "maptilerStyle": settings.maptiler_style, "demo": settings.demo,
+    cfg = {"maptilerKey": settings.maptiler_key, "maptilerStyle": settings.maptiler_style, "demo": settings.demo, "timeScale": clock.speed if clock else 1,
            "channels": [{"channel": c["channel"].lstrip("@"), "note": c.get("note", "")} for c in settings.channels],
            "termsVersion": settings.terms_version, "operator": settings.operator, "contact": settings.contact}
     return Response(f"window.APP_CONFIG = {json.dumps(cfg)};", media_type="application/javascript")

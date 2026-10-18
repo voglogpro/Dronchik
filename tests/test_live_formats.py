@@ -209,6 +209,20 @@ def test_forecast_is_a_note_not_alerts(gaz, parser):
     snap = e.snapshot(T0 + 60)
     assert snap["regions"] == {} and snap["tracks"] == []
     assert snap["forecast"]["channel"] == "radar_lipetskk"
+    pairs = {(v["from"], v["to"]) for v in snap["forecast"]["vectors"]}
+    # основа «липецк» узнаётся и с опечаткой «Липецкпя»
+    assert pairs == {("bryansk-oblast", "kaluga-oblast"), ("bryansk-oblast", "smolensk-oblast"),
+                     ("belgorod-oblast", "voronezh-oblast"), ("belgorod-oblast", "lipetsk-oblast"), ("belgorod-oblast", "tula-oblast"),
+                     ("belgorod-oblast", "ryazan-oblast")}
+
+
+def test_forecast_vectors_ldnr_and_new_regions(gaz):
+    from app.forecast import ForecastParser
+    text = ("▶️ЛДНР → Воронежская, Липецкая, Тульская,  а так-же →Ростовская, Волгоградская область.\n"
+            "▶️Херсонская область РФ →Республика Крым, г. Севастополь, а так же Причерноморье Краснодарского края.")
+    pairs = [(v["from"], v["to"]) for v in ForecastParser(gaz).vectors(text)]
+    assert pairs == [("lnr,dnr", r) for r in ["voronezh-oblast", "lipetsk-oblast", "tula-oblast", "rostov-oblast", "volgograd-oblast"]] \
+        + [("kherson-oblast", r) for r in ["crimea", "sevastopol", "krasnodar-krai"]]
 
 
 @pytest.mark.parametrize("text,expected", [

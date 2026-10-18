@@ -34,6 +34,9 @@ SPEED_WINDOW_S = 40 * 60
 PREDICT_MINUTES = 60
 HINT_PREDICT_MINUTES = 20
 PREDICT_STEP_MIN = 5
+# Новая тревога в соседней области или районе без новой фиксации: вероятно, туда повернула ближайшая цель
+STEER_KM = 60.0             # цель (по прогнозу) не дальше этого от границы
+STEER_MAX_TURN = 100.0      # и область не позади неё
 
 
 @dataclass
@@ -49,6 +52,14 @@ class TrackPoint:
 
 
 @dataclass
+class Steer:
+    t: float
+    lat: float
+    lon: float
+    area_id: str
+
+
+@dataclass
 class Track:
     id: int
     points: list[TrackPoint]
@@ -57,6 +68,7 @@ class Track:
     status: str = "active"  # active | destroyed | lost
     count: int = 1
     engaged_at: float | None = None  # когда последний раз сообщали о работе ПВО по этой цели
+    steer: Steer | None = None       # поворот к области с новой тревогой (до следующей фиксации)
 
     @property
     def last(self) -> TrackPoint:
@@ -88,15 +100,39 @@ class Track:
             return self.bearing_hint, speed, "hint"
         return None, speed, "none"
 
-    def position_at(self, t: float) -> tuple[float, float]:
-        bearing, speed, _ = self.motion()
-        if bearing is None or t <= self.last.t:
-            return self.last.lat, self.last.lon
-        dist = speed * (t - self.last.t) / 3600
+    def course(self) -> tuple[tuple[float, float, float], float | None, float, str]:
+        """Откуда и куда летит цель: ((lat, lon, t) опорной точки, курс, скорость, основание курса).
+
+        Обычно опора — последняя фиксация. Если после неё в соседней области объявили тревогу
+        (steer), цель до момента тревоги летит прежним курсом, а затем поворачивает к той области.
+        """
+        bearing, speed, basis = self.motion()
+        last = self.last
+        if bearing is not None and self.steer and self.steer.t > last.t and not self.target:
+            lat, lon = destination(last.lat, last.lon, bearing, speed * (self.steer.t - last.t) / 3600)
+            if haversine_km(lat, lon, self.steer.lat, self.steer.lon) > 5:
+                return (lat, lon, self.steer.t), bearing_deg(lat, lon, self.steer.lat, self.steer.lon), speed, "alert"
+        return (last.lat, last.lon, last.t), bearing, speed, basis
+
+    def _goal(self) -> tuple[float, float] | None:
         if self.target:
-            to_target = haversine_km(self.last.lat, self.last.lon, self.target.lat, self.target.lon)
-            dist = min(dist, to_target)
-        return destination(self.last.lat, self.last.lon, bearing, dist)
+            return self.target.lat, self.target.lon
+        if self.steer and self.steer.t > self.last.t:
+            return self.steer.lat, self.steer.lon
+        return None
+
+    def position_at(self, t: float) -> tuple[float, float]:
+        (lat, lon, t0), bearing, speed, _ = self.course()
+        if bearing is None or t <= t0:
+            if bearing is not None and t > self.last.t:  # между фиксацией и поворотом — прежним курсом
+                b, sp, _ = self.motion()
+                return destination(self.last.lat, self.last.lon, b, sp * (t - self.last.t) / 3600)
+            return self.last.lat, self.last.lon
+        dist = speed * (t - t0) / 3600
+        goal = self._goal()
+        if goal:
+            dist = min(dist, haversine_km(lat, lon, *goal))
+        return destination(lat, lon, bearing, dist)
 
 
 @dataclass
@@ -155,6 +191,35 @@ class Tracker:
             return None
         track = max(candidates, key=lambda tr: tr.last.t)
         track.target = target
+        return track
+
+    def steer_to_alert(self, area_id: str, t: float) -> Track | None:
+        """Тревога объявлена в новой области или районе: ближайшая подлетающая цель поворачивает туда."""
+        area = self.gaz.regions.get(area_id) or self.gaz.districts.get(area_id)
+        if area is None:
+            return None
+        best = None
+        for tr in self.active(t):
+            if tr.target or (tr.steer and tr.steer.t > tr.last.t):
+                continue
+            _, bearing, _, _ = tr.course()
+            if bearing is None or area_id in (tr.last.region_id, tr.last.district_id):
+                continue
+            lat, lon = tr.position_at(t)
+            here = Point(lon, lat)
+            if area.prepared.contains(here):
+                continue
+            edge = nearest_points(area.geometry, here)[0]
+            dist = haversine_km(lat, lon, edge.y, edge.x)
+            clat, clon = area.center
+            if dist > STEER_KM or angle_diff(bearing, bearing_deg(lat, lon, clat, clon)) > STEER_MAX_TURN:
+                continue
+            if best is None or dist < best[0]:
+                best = (dist, tr)
+        if best is None:
+            return None
+        track = best[1]
+        track.steer = Steer(t, *area.center, area_id)
         return track
 
     def nearest(self, place: Place, t: float, radius_km: float = NEAR_KM) -> Track | None:
@@ -231,17 +296,18 @@ class Tracker:
     # ---- прогноз ----
 
     def predict(self, track: Track, now: float) -> Prediction | None:
-        bearing, speed, basis = track.motion()
+        _, bearing, speed, basis = track.course()
         if bearing is None:
             return None
         start_lat, start_lon = track.position_at(now)
         elapsed_min = max(now - track.last.t, 0) / 60
         # по одному слову «на север» без второй точки рисуем только короткий отрезок
-        full = HINT_PREDICT_MINUTES if basis == "hint" else PREDICT_MINUTES
+        full = HINT_PREDICT_MINUTES if basis in ("hint", "alert") else PREDICT_MINUTES
         horizon = max(full - elapsed_min, PREDICT_STEP_MIN)
         max_dist = speed * horizon / 60
-        if track.target:
-            max_dist = min(max_dist, haversine_km(start_lat, start_lon, track.target.lat, track.target.lon) + 15)
+        goal = track._goal()
+        if goal:
+            max_dist = min(max_dist, haversine_km(start_lat, start_lon, *goal) + 15)
         steps = max(int(horizon // PREDICT_STEP_MIN), 1)
         path = [(start_lat, start_lon)]
         for i in range(1, steps + 1):
@@ -252,7 +318,7 @@ class Tracker:
 
         # ширина конуса — по реальной точности: по истории курс по фиксациям ошибается
         # на 35° в медиане, поэтому конус заметно шире, чем при заявленной каналом цели
-        half_angle = {"target": 12.0, "observed": 30.0, "hint": 35.0}[basis]
+        half_angle = {"target": 12.0, "observed": 30.0, "hint": 35.0, "alert": 35.0}[basis]
         if basis == "observed" and len(track.points) >= 3:
             half_angle = 25.0
         cone_left, cone_right = [], []
@@ -280,7 +346,7 @@ class Tracker:
         start = Point(start_lon, start_lat)
         out: dict[str, int] = {}
         for area in areas:
-            if area.id in exclude or not area.geometry.intersects(zone_geom):
+            if area.id in exclude or not area.prepared.intersects(zone_geom):
                 continue
             zone = area.geometry.intersection(zone_geom)
             if zone.is_empty:
