@@ -1,0 +1,19 @@
+[
+  {"channel": "vrv_radar", "region": null, "note": "Радар ВРВ — оповещения по тылу"},
+  {"channel": "lpr1_treugolnik", "region": null, "note": "ЛПР1 — основной канал"},
+  {"channel": "radarrussiia", "region": null, "note": "Радар по всей России"},
+  {"channel": "radar_plus_bpla", "region": null, "note": "Радар ПЛЮС"},
+  {"channel": "locatorru", "region": null, "note": "Локатор России"},
+  {"channel": "lpr1_Belgorod_alarm", "region": "belgorod-oblast", "note": "ЛПР1 — Белгородская область"},
+  {"channel": "lpr1_Kursk_alarm", "region": "kursk-oblast", "note": "ЛПР1 — Курская область"},
+  {"channel": "lpr1_Bryansk_alarm", "region": "bryansk-oblast", "note": "ЛПР1 — Брянская область"},
+  {"channel": "lpr1_Orlov_alarm", "region": "oryol-oblast", "note": "ЛПР1 — Орловская область"},
+  {"channel": "lpr1_Voronezh_alarm", "region": "voronezh-oblast", "note": "ЛПР1 — Воронежская область"},
+  {"channel": "lpr1_Rostov_alarm", "region": "rostov-oblast", "note": "ЛПР1 — Ростовская область"},
+  {"channel": "lpr1_Krasnodar_alarm", "region": "krasnodar-krai", "note": "ЛПР1 — Краснодарский край"},
+  {"channel": "radar_orei", "region": "oryol-oblast", "note": "Радар Орёл"},
+  {"channel": "Radar_Moscow_99", "region": "moscow-oblast", "note": "Радар. Москва и область"},
+  {"channel": "radar_lipetskk", "region": "lipetsk-oblast", "note": "Радар Липецк"},
+  {"channel": "radar_ru_smolensk", "region": "smolensk-oblast", "note": "Радар.ру — Смоленская область"},
+  {"channel": "lipobl", "region": "lipetsk-oblast", "note": "Правительство Липецкой области (официальный)"}
+]

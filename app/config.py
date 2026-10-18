@@ -32,10 +32,16 @@ class Settings:
     db_path: str = str(ROOT / "data" / "dronchik.db")
     ingest_token: str = ""
     history_hours: float = 3.0
+    poll_interval: float = 30.0   # как часто перечитывать каналы через t.me/s, секунды
 
     @property
     def telegram_enabled(self) -> bool:
         return bool(self.tg_api_id and self.tg_api_hash and self.channels)
+
+    @property
+    def web_enabled(self) -> bool:
+        """Без Telegram-аккаунта читаем публичные каналы через их веб-версию t.me/s/…"""
+        return bool(self.channels) and not self.telegram_enabled
 
     @property
     def channel_regions(self) -> dict[str, str]:
@@ -44,7 +50,9 @@ class Settings:
 
 def load_settings() -> Settings:
     _load_dotenv(ROOT / ".env")
-    channels_file = Path(os.environ.get("TG_CHANNELS_FILE", ROOT / "channels.json"))
+    # свой список — channels.json (не в git), иначе встроенный channels.default.json
+    default_channels = ROOT / "channels.json" if (ROOT / "channels.json").exists() else ROOT / "channels.default.json"
+    channels_file = Path(os.environ.get("TG_CHANNELS_FILE", default_channels))
     channels = json.loads(channels_file.read_text(encoding="utf-8")) if channels_file.exists() else []
     s = Settings(
         maptiler_key=os.environ.get("MAPTILER_KEY", ""),
@@ -56,7 +64,8 @@ def load_settings() -> Settings:
         db_path=os.environ.get("DB_PATH", str(ROOT / "data" / "dronchik.db")),
         ingest_token=os.environ.get("INGEST_TOKEN", ""),
         history_hours=float(os.environ.get("HISTORY_HOURS", "3")),
+        poll_interval=float(os.environ.get("POLL_INTERVAL", "30")),
     )
     demo = os.environ.get("DEMO", "auto").lower()
-    s.demo = demo in ("1", "true", "yes") or (demo == "auto" and not s.telegram_enabled)
+    s.demo = demo in ("1", "true", "yes") or (demo == "auto" and not s.channels)
     return s

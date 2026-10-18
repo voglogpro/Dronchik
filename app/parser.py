@@ -6,6 +6,9 @@
   «Брянская обл.: беспилотник в районе Трубчевска, движется на северо-восток»
   «Отбой угрозы БПЛА по Белгородской области»
 Каждая строка разбирается отдельно; регион из заголовка переносится на строки ниже.
+Формат «места на одних строках, статус на следующей» (Радар ВРВ, ЛПР1):
+  «Урицкий район / Орловская область / Сбитие БПЛА» — строки с одними местами
+приклеиваются к следующей строке со статусом.
 """
 from __future__ import annotations
 
@@ -23,17 +26,28 @@ HEADING = "heading"  # «ещё один в сторону Корочи» — к
 
 RX_CLEAR = re.compile(r"отбо[йяе]|угроз\w*\s+миновал|опасност\w*\s+миновал|отмен\w*\s+(?:угроз|опасн|тревог|режим)"
     r"|режим\w*(?:\s+\w+){0,3}\s+(?:снят|отменен)|снят\w*\s+режим")
-RX_MISSILE = re.compile(r"ракетн\w*\s+(?:опасн|угроз)|угроз\w*\s+ракетн|баллист")
+RX_MISSILE = re.compile(r"ракетн\w*\s+(?:бомбов\w*\s+)?(?:опасн|угроз)|угроз\w*\s+ракетн|баллист|авиационн\w*\s+(?:\w+\s+){0,2}опасн")
 RX_UAV_ALERT = re.compile(
-    r"угроз\w*\s+(?:атак\w*\s+)?(?:бпла|беспилот|дрон)|беспилотн\w*\s+опасн|опасност\w*\s+(?:атак\w*\s+)?бпла"
-    r"|режим\w*\s+(?:беспилотн|бпла)|атак\w*\s+бпла|воздушн\w*\s+тревог"
+    r"угроз\w*\s+(?:атак\w*\s+)?(?:бпла|беспилот|дрон)|беспилотн\w*\s+опасн"
+    r"|опасност\w*\s+(?:по\s+)?(?:атак\w*\s+)?бпла|внимани\w*\s+(?:по\s+)?(?:возможн\w*\s+)?бпла"
+    r"|режим\w*\s+(?:беспилотн|бпла)|атак\w*\s+бпла|воздушн\w*\s+тревог|тревог\w*\s+по\s+(?:бпла|фпв|дрон)"
 )
-RX_DRONE = re.compile(r"бпла|беспилот|дрон|шахед|герань|мопед|🛵|ударн\w*\s+бла|(?<![а-я])бла(?![а-я])|цел[ьи](?![а-я])")
+RX_DRONE = re.compile(r"бпла|беспилот|дрон|фпв|fpv|шахед|герань|мопед|🛵|ударн\w*\s+бла|(?<![а-я])бла(?![а-я])|цел[ьи](?![а-я])")
 RX_MOVE = re.compile(r"→|->|➡|курс|движ|летит|летят|пролет|пролёт|в сторону|направлен|замечен|фиксаци|зафиксир|обнаружен|в районе|над |шум|звук")
-RX_DESTROYED = re.compile(r"сбит|уничтож|подавлен|нейтрализ|отработал\w*\s+пво|работа\w*\s+пво")
+RX_DESTROYED = re.compile(r"сбит|сбити|уничтож|подавлен|нейтрализ|отработал\w*\s+пво|работа\w*\s+пво")
 RX_TARGET = re.compile(r"(?:курс\w*|движ\w*|летит|летят|направля\w*)\s+(?:на|в сторону|в направлении|к)\s+|в сторону\s+|в направлении\s+|\s*(?:→|->|➡️?)\s*")
 RX_COUNT = re.compile(r"(?<![\d:])(\d{1,3})\s*(?:х\s*)?(?:бпла|беспилот|дрон|шахед|герань|мопед|бла|цел)|(?:бпла|беспилот\w*|шахед\w*|цел\w*)\s*[x×х]\s*(\d{1,3})")
 RX_GROUP = re.compile(r"групп[аы]|несколько|рой|стая")
+
+# подписи каналов: «📡Локатор России - @locatorru» — вырезаем ссылки и упоминания, строки-подписи выбрасываем
+RX_LINKS = re.compile(r"@[a-z0-9_]{4,}|https?://\S+|t\.me/\S+|max\.ru/\S+")
+RX_BOILERPLATE = re.compile(r"подписат|наш\w* (?:тг|max|мах|канал)|обратн\w* связ|в max\b|в мах\b|реклам|помочь нашей|сбор\w* средств")
+# сводки и новости постфактум — не оперативная обстановка
+RX_REPORT = re.compile(r"за ночь|за сутки|прошедш\w* ноч|в течение ночи|дежурными силами|минобороны|по данным|сообщил"
+                       r"|в результате|погиб|пострадав|поврежден|попал|предположительно прош|уничтожено \d|сбито \d|свыше \d"
+                       r"|напоминаем|не попадите|публикаци|меры (?:безопасности|предосторожности)$")
+# реклама и служебные посты каналов — пропускаем сообщение целиком
+RX_PROMO = re.compile(r"принято решение создать|секретн\w* способ|антиглушилк|белых списк|₽|сделк|лицензи|розыгрыш|скидк")
 
 DIRECTIONS = [
     ("северо-восто", 45), ("северо-запад", 315), ("юго-восто", 135), ("юго-запад", 225),
@@ -54,6 +68,7 @@ class Event:
     target: Place | None = None      # «курсом на X»
     bearing: float | None = None     # «на северо-восток»
     count: int = 1
+    scope: str = "all"               # для CLEAR: что снимаем — uav | missile | all
     text: str = ""
 
 
@@ -68,6 +83,12 @@ def _direction_bearing(text: str) -> float | None:
         if word.startswith(prefix):
             return float(deg)
     return None
+
+
+def _clear_scope(line: str) -> str:
+    missile = bool(re.search(r"ракетн|авиацион|баллист", line))
+    uav = bool(re.search(r"бпла|беспилот|дрон|фпв", line))
+    return "missile" if missile and not uav else "uav" if uav and not missile else "all"
 
 
 def _count(text: str) -> int:
@@ -91,17 +112,45 @@ def _split_targets(line: str, mentions: list[Mention]) -> tuple[list[Mention], M
     return [x for x in mentions if x not in seen], target
 
 
+RX_STATUS = re.compile("|".join(rx.pattern for rx in (RX_CLEAR, RX_MISSILE, RX_UAV_ALERT, RX_DRONE, RX_DESTROYED)))
+
+
+def _lines(text: str, gaz: Gazetteer) -> list[str]:
+    """Чистит подписи и склеивает строки-«шапки» с местами со следующей строкой статуса."""
+    out: list[str] = []
+    pending: list[str] = []
+    for raw in re.split(r"[\n\r]+", text):
+        line = RX_LINKS.sub("", normalize(raw)).strip(" \t-—–|/•")
+        if not line or RX_BOILERPLATE.search(line):
+            continue
+        # короткая строка без статуса — «шапка» с местами («Дмитровский район», «Орловская область»)
+        if not RX_STATUS.search(line) and not RX_MOVE.search(line) and len(line) <= 60 and gaz.find(line, None, loose=True):
+            pending.append(line)
+            continue
+        out.append(", ".join([*pending, line]) if pending else line)
+        pending = []
+    if pending:
+        # места в конце сообщения («Крупец - тревога по ФПВ! … / Рыльский район») относятся к последней строке
+        if out:
+            out[-1] = ", ".join([out[-1], *pending])
+        else:
+            out.append(", ".join(pending))
+    return out
+
+
 class MessageParser:
     def __init__(self, gazetteer: Gazetteer):
         self.gaz = gazetteer
 
     def parse(self, text: str, default_region: str | None = None) -> list[Event]:
         events: list[Event] = []
+        if RX_PROMO.search(normalize(text)):
+            return events
         context_region = default_region
         drone_context = False  # строка ниже «БПЛА ...» может продолжать мысль: «ещё один в сторону Корочи»
-        for raw_line in re.split(r"[\n\r]+", text):
-            line = normalize(raw_line).strip()
-            if not line:
+        for raw_line in _lines(text, self.gaz):
+            line = raw_line
+            if RX_REPORT.search(line):
                 continue
             mentions = self.gaz.find(line, context_region)
             region_ids = list(dict.fromkeys(m.place.region_id for m in mentions))
@@ -111,8 +160,8 @@ class MessageParser:
             line_regions = region_ids or ([context_region] if context_region else [])
 
             if RX_CLEAR.search(line):
-                if line_regions:
-                    events.append(Event(CLEAR, line_regions, district_ids, text=raw_line.strip()))
+                # «Отбой по ранее объявленным регионам» без региона — снимает всё, что объявлял этот канал
+                events.append(Event(CLEAR, line_regions, district_ids, scope=_clear_scope(line), text=raw_line.strip()))
                 continue
 
             line_alert = False

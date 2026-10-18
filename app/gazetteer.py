@@ -141,6 +141,7 @@ class Gazetteer:
 
         self.districts: dict[str, District] = {}
         district_patterns: dict[str, list[Place]] = {}
+        noun_patterns: dict[str, list[Place]] = {}  # «Ступино», «ГО Электросталь» — только при известной области
         districts_file = data_dir / "districts.geojson"
         if districts_file.exists():
             for f in json.loads(districts_file.read_text(encoding="utf-8"))["features"]:
@@ -153,6 +154,9 @@ class Gazetteer:
                 core = re.sub(r"(?i)\b(?:городской|округ|район|г\.о\.)\b", " ", props["raw"]).strip()
                 core = normalize(re.sub(r"\s+", " ", core))
                 adjective = bool(re.search(r"(ий|ый|ой)$", core))
+                if not adjective:
+                    noun = r"[\s\-]+".join(re.escape(word_stem(w)) + f"[{LETTER}]{{0,3}}" for w in re.split(r"[\s\-]+", core))
+                    noun_patterns.setdefault(rf"(?<![{LETTER}])(?:(?:го|г\.\s?о\.|мо|городской округ)\s+)?{noun}(?![{LETTER}])", []).append(place)
                 if not adjective and " " not in core:
                     # округ, названный по городу: «Шебекино» → «Шебекинский округ», «Алексеевка» → «Алексеевский»
                     if core.endswith("ск"):
@@ -168,6 +172,7 @@ class Gazetteer:
                 elif not any(c.region_id == d.region_id for c in same):
                     same.append(place)
         self._district_res = [(re.compile(p), pls) for p, pls in sorted(district_patterns.items(), key=lambda x: -len(x[0]))]
+        self._district_noun_res = [(re.compile(p), pls) for p, pls in sorted(noun_patterns.items(), key=lambda x: -len(x[0]))]
 
         places_raw = json.loads((data_dir / "places.json").read_text(encoding="utf-8"))["places"]
         self.places: list[Place] = []
@@ -200,13 +205,14 @@ class Gazetteer:
         self._place_res = [(re.compile(p), pl) for p, pl in sorted(patterns, key=lambda x: -len(x[0]))]
         self.by_name = {normalize(p.name): p for p in self.places}
 
-    def find(self, text: str, context_region: str | None = None) -> list[Mention]:
+    def find(self, text: str, context_region: str | None = None, loose: bool = False) -> list[Mention]:
         """Все упоминания регионов, районов и городов в тексте, без пересечений, в порядке появления.
 
         Порядок поиска: регионы («Курской области») → районы («Курский район») → города,
         чтобы «Курская область» и «Курский район» не превращались в город Курск.
         Одноимённые районы («Октябрьский район» есть в нескольких областях) выбираются
-        по региону, упомянутому в тексте, или по context_region.
+        по региону, упомянутому в тексте, или по context_region. С loose=True неоднозначные
+        районы тоже возвращаются (первый вариант) — чтобы понять, что строка вообще про место.
         """
         norm = normalize(text)
         taken = [False] * len(norm)
@@ -223,17 +229,26 @@ class Gazetteer:
 
         scan(self._region_res)
         context = {m.place.region_id for m in found} or ({context_region} if context_region else set())
-        for rx, candidates in self._district_res:
-            for m in rx.finditer(norm):
-                if any(taken[m.start():m.end()]):
-                    continue
-                matching = [c for c in candidates if c.region_id in context] if len(candidates) > 1 else candidates
-                if len(matching) != 1:
-                    continue
-                for i in range(m.start(), m.end()):
-                    taken[i] = True
-                found.append(Mention(m.start(), m.end(), matching[0]))
+
+        def scan_districts(compiled, need_context: bool):
+            for rx, candidates in compiled:
+                for m in rx.finditer(norm):
+                    if any(taken[m.start():m.end()]):
+                        continue
+                    matching = [c for c in candidates if c.region_id in context] \
+                        if (len(candidates) > 1 or need_context) else candidates
+                    if loose and not matching:
+                        matching = candidates[:1]
+                    if len(matching) != 1:
+                        continue
+                    for i in range(m.start(), m.end()):
+                        taken[i] = True
+                    found.append(Mention(m.start(), m.end(), matching[0]))
+
+        scan_districts(self._district_res, need_context=False)
         scan(self._place_res)
+        # названия-существительные («Ступино», «Донецк») слишком многозначны — только в известной области
+        scan_districts(self._district_noun_res, need_context=not loose)
         found.sort(key=lambda x: x.start)
         return found
 

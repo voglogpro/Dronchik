@@ -21,9 +21,11 @@ from .engine import Engine
 from .gazetteer import Gazetteer
 from .storage import MessageStore
 from .telegram_source import run_telegram
+from .web_source import run_web_channels
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("dronchik")
+logging.getLogger("httpx").setLevel(logging.WARNING)  # не писать в лог каждый опрос канала
 
 settings = load_settings()
 gazetteer = Gazetteer()
@@ -51,7 +53,7 @@ async def broadcast() -> None:
 async def on_message(channel: str, msg_id: int, t: float, text: str) -> None:
     if store and not store.add(channel, msg_id, t, text):
         return
-    if engine.process(channel, text, t):
+    if engine.process(channel, text, t, msg_id):
         await broadcast()
 
 
@@ -68,12 +70,17 @@ async def lifespan(_: FastAPI):
     if settings.demo:
         log.info("ДЕМО-режим: проигрываем тестовый сценарий (DEMO=0 и настройки Telegram — для боевого режима)")
         tasks.append(asyncio.create_task(run_demo(clock, on_message)))
-    elif settings.telegram_enabled:
-        for channel, _msg_id, t, text in store.since(time.time() - settings.history_hours * 3600):
-            engine.process(channel, text, t)
-        tasks.append(asyncio.create_task(run_telegram(settings, on_message)))
     else:
-        log.warning("Telegram не настроен — данные будут только через POST /api/ingest")
+        for channel, msg_id, t, text in store.since(time.time() - settings.history_hours * 3600):
+            engine.process(channel, text, t, msg_id)
+        if settings.telegram_enabled:
+            tasks.append(asyncio.create_task(run_telegram(settings, on_message)))
+        elif settings.web_enabled:
+            names = [c["channel"].lstrip("@") for c in settings.channels]
+            tasks.append(asyncio.create_task(run_web_channels(
+                names, on_message, settings.poll_interval, settings.history_hours * 3600)))
+        else:
+            log.warning("каналы не заданы — данные будут только через POST /api/ingest")
     yield
     for task in tasks:
         task.cancel()
@@ -104,7 +111,8 @@ def places() -> list[dict]:
 
 @app.get("/config.js")
 def config_js() -> Response:
-    cfg = {"maptilerKey": settings.maptiler_key, "maptilerStyle": settings.maptiler_style, "demo": settings.demo}
+    cfg = {"maptilerKey": settings.maptiler_key, "maptilerStyle": settings.maptiler_style, "demo": settings.demo,
+           "channels": [{"channel": c["channel"].lstrip("@"), "note": c.get("note", "")} for c in settings.channels]}
     return Response(f"window.APP_CONFIG = {json.dumps(cfg)};", media_type="application/javascript")
 
 

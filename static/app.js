@@ -11,6 +11,8 @@
 
   const $ = (id) => document.getElementById(id);
   const eta = (m) => (m <= 1 ? "< 1 мин" : `~${m} мин`);
+  const tgLink = (ch, id) => `https://t.me/${encodeURIComponent(ch)}${id ? `/${id}` : ""}`;
+  const channelLinks = (list) => (list || []).map((c) => `<a href="${tgLink(c)}" target="_blank" rel="noopener">@${esc(c)}</a>`).join(", ");
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const hhmm = (t) => new Date(t * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   const ago = (t, now) => {
@@ -145,7 +147,8 @@
   function statusHtml(info) {
     if (!info) return `<span style="color:#3dd68c">Угроз не зафиксировано</span>`;
     if (info.status === "predicted") return `<span style="color:${COLORS.predicted}">Вероятный подлёт: ${eta(info.eta_min)}</span>`;
-    return `<span style="color:${COLORS[info.status]}">${LABELS[info.status]}</span><br><span class="sub">с ${hhmm(info.since)}, обновлено ${ago(info.updated, lastState.now)}</span>`;
+    return `<span style="color:${COLORS[info.status]}">${LABELS[info.status]}</span><br><span class="sub">с ${hhmm(info.since)}, обновлено ${ago(info.updated, lastState.now)}</span>`
+      + (info.channels && info.channels.length ? `<br><span class="sub">Источник: ${channelLinks(info.channels)}</span>` : "");
   }
 
   function areaPopup(lngLat, districtId, regionId) {
@@ -252,7 +255,7 @@
     const pr = tr.prediction;
     let html = `<b>Цель #${tr.id}${tr.count > 1 ? ` · ${tr.count} БПЛА` : ""}</b><br>`;
     html += `Последняя фиксация: ${esc(last.place)}${last.district_name && last.district_name !== last.place ? ` (${esc(last.district_name)})` : ""}, ${ago(last.t, now)}<br>`;
-    html += `Источников: ${new Set(tr.points.flatMap((p) => p.sources)).size}, точек: ${tr.points.length}`;
+    html += `Точек: ${tr.points.length} · источники: ${channelLinks([...new Set(tr.points.flatMap((p) => p.sources))])}`;
     if (pr) {
       html += `<br>Курс ${pr.bearing}°, ~${pr.speed} км/ч (${BASIS[pr.basis]})`;
       if (tr.target) html += `<br>Заявленная цель: ${esc(tr.target)}`;
@@ -280,6 +283,7 @@
       return `<li data-region="${esc(id)}">
         <div class="row"><span>${esc(r.name)}</span><span class="badge ${r.status}">${r.status === "predicted" ? eta(r.eta_min) : LABELS[r.status]}</span></div>
         <div class="sub">${r.status === "predicted" ? "по прогнозу маршрута" : `с ${hhmm(r.since)} · обновлено ${ago(r.updated, state.now)}`}</div>
+        ${r.channels && r.channels.length ? `<div class="sub src">${channelLinks(r.channels)}</div>` : ""}
         ${ds.length ? `<div class="sub districts">Районы: ${ds.join(", ")}</div>` : ""}
       </li>`;
     }).join("") : `<li class="empty">Активных тревог нет</li>`;
@@ -295,10 +299,11 @@
     }).join("") : `<li class="empty">Целей не зафиксировано</li>`;
 
     $("feed").innerHTML = state.feed.length ? state.feed.slice(0, 25).map((m) => `
-      <li><div class="row"><span class="sub">@${esc(m.channel)}</span><span class="sub">${hhmm(m.t)}</span></div>
+      <li><div class="row"><a class="sub src" href="${tgLink(m.channel, m.msg_id)}" target="_blank" rel="noopener">@${esc(m.channel)}</a><span class="sub">${hhmm(m.t)}</span></div>
       <div class="text">${esc(m.text)}</div></li>`).join("") : `<li class="empty">Сообщений пока нет</li>`;
 
-    $("status-line").textContent = `${cfg.demo ? "ДЕМО · " : ""}обновлено ${hhmm(state.now)}`;
+    const live = cfg.channels && cfg.channels.length && !cfg.demo;
+    $("status-line").textContent = `${cfg.demo ? "ДЕМО · " : live ? `онлайн · ${cfg.channels.length} каналов · ` : ""}обновлено ${hhmm(state.now)}`;
   }
 
   $("alert-list").addEventListener("click", (e) => {
@@ -426,6 +431,11 @@
   }
   async function poll() {
     try { render(await (await fetch("api/state")).json()); } catch { $("status-line").textContent = "Нет связи с сервером"; }
+  }
+
+  if (cfg.channels && cfg.channels.length && !cfg.demo) {
+    $("sources-section").hidden = false;
+    $("sources").innerHTML = cfg.channels.map((c) => `<li><a href="${tgLink(c.channel)}" target="_blank" rel="noopener">@${esc(c.channel)}</a>${c.note ? `<div class="sub">${esc(c.note)}</div>` : ""}</li>`).join("");
   }
 
   $("panel-toggle").addEventListener("click", () => {

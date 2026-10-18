@@ -110,6 +110,9 @@ select, .btn {
 .city.capital i { width: 6px; height: 6px; background: #e8ebf0; }
 .z-capitals .city.capital, .z-towns .city { display: flex; }
 .sub.districts { color: var(--uav); }
+.list a, .maplibregl-popup-content a { color: var(--accent); text-decoration: none; }
+.list a:hover, .maplibregl-popup-content a:hover { text-decoration: underline; }
+.sources li { cursor: default; }
 hr.sep { border: 0; border-top: 1px solid var(--panel-border); margin: 8px 0; }
 
 .maplibregl-popup-content { background: #1b212b; color: var(--text); border-radius: 10px; font-size: 13px; padding: 10px 12px; }
