@@ -17,6 +17,10 @@ from typing import Awaitable, Callable
 
 import httpx
 
+from . import banners
+from .gazetteer import normalize
+from .parser import RX_STATUS
+
 log = logging.getLogger(__name__)
 
 OnMessage = Callable[[str, int, float, str], Awaitable[None]]
@@ -25,6 +29,7 @@ RX_POST = re.compile(r'<div class="tgme_widget_message_wrap.*?(?=<div class="tgm
 RX_ID = re.compile(r'data-post="[^"/]+/(\d+)"')
 RX_TEXT = re.compile(r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', re.S)
 RX_TIME = re.compile(r'<time[^>]+datetime="([^"]+)"')
+RX_PHOTO = re.compile(r"tgme_widget_message_photo_wrap[^>]*background-image:url\('([^']+)'\)")
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; DronchikBot/1.0; +https://github.com/voglogpro/Dronchik)"}
 
 
@@ -46,11 +51,34 @@ def parse_page(page: str) -> list[tuple[int, float, str]]:
     return sorted(posts)
 
 
+def page_photos(page: str) -> dict[int, str]:
+    """{id поста: адрес первой картинки} — для постов-баннеров уровня опасности."""
+    out = {}
+    for block in RX_POST.findall(page):
+        m_id, m_photo = RX_ID.search(block), RX_PHOTO.search(block)
+        if m_id and m_photo:
+            out[int(m_id.group(1))] = html.unescape(m_photo.group(1))
+    return out
+
+
+async def banner_text(client: httpx.AsyncClient, text: str, photo: str | None) -> str:
+    """Пост «картинка + список мест» без статуса в тексте: статус берём из цвета баннера."""
+    if not photo or RX_STATUS.search(normalize(text)):
+        return text
+    try:
+        resp = await client.get(photo)
+        resp.raise_for_status()
+    except Exception as exc:
+        log.info("баннер %s не скачался: %s", photo[:60], exc)
+        return text
+    return banners.annotate(text, banners.classify(resp.content))
+
+
 MAX_PAGES = 15  # не больше ~300 постов назад за один проход
 
 
-async def fetch_since(client: httpx.AsyncClient, channel: str, border: int,
-                      since: float) -> tuple[list[tuple[int, float, str]], int]:
+async def fetch_since(client: httpx.AsyncClient, channel: str, border: int, since: float,
+                      photos: dict[int, str] | None = None) -> tuple[list[tuple[int, float, str]], int]:
     """(посты новее border и since, id самого свежего поста канала).
 
     Листает t.me/s/…?before= назад, пока не дойдёт до border или since.
@@ -68,6 +96,8 @@ async def fetch_since(client: httpx.AsyncClient, channel: str, border: int,
         page = parse_page(resp.text)
         if not page:
             break
+        if photos is not None:
+            photos.update(page_photos(resp.text))
         newest = max(newest, page[-1][0])
         for post in page:
             if post[0] > border and post[1] >= since:
@@ -85,8 +115,10 @@ async def poll_channel(client: httpx.AsyncClient, channel: str, last_seen: dict[
     border = last_seen.get(channel, 0)
     # первый проход — история за history_s; дальше — всё новее последнего виденного поста
     since = time.time() - history_s if border == 0 else 0
-    posts, newest = await fetch_since(client, channel, border, since)
+    photos: dict[int, str] = {}
+    posts, newest = await fetch_since(client, channel, border, since, photos)
     for msg_id, t, text in posts:
+        text = await banner_text(client, text, photos.get(msg_id))
         await on_message(channel.lower(), msg_id, t, text)
     # запоминаем самый свежий пост канала, даже если он старше окна истории
     last_seen[channel] = max(border, newest)

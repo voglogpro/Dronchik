@@ -10,13 +10,14 @@ import json
 import logging
 import time
 
-from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Cookie, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import ROOT, load_settings
+from .access import COOKIE, COOKIE_MAX_AGE, Access
 from .demo import DemoClock, run_demo
 from .engine import Engine, Publish
 from .gazetteer import Gazetteer
@@ -35,22 +36,37 @@ engine = Engine(gazetteer, settings.channel_regions, Publish(**settings.publish)
 store = MessageStore(settings.db_path) if not settings.demo else None
 clock = DemoClock() if settings.demo else None
 heatmap = Heatmap(engine.parser, store, settings.channel_regions)
-clients: set[WebSocket] = set()
+# демо без кодов показывает всё: там выдуманный сценарий
+access = Access(settings.access_codes, settings.access_secret,
+                public_full=settings.public_level == "full" or (settings.demo and not settings.access_codes))
+clients: dict[WebSocket, bool] = {}  # соединение -> подробная карта (есть код доступа)
 
 
 def now() -> float:
     return clock.now() if clock else time.time()
 
 
+def snapshots(t: float) -> tuple[dict, dict]:
+    """(подробный, публичный) снимок одного момента."""
+    full = engine.snapshot(t)
+    return full, engine.public_snapshot(t, full)
+
+
+def snapshot_for(is_full: bool) -> dict:
+    full, public = snapshots(now())
+    return full if is_full else public
+
+
 async def broadcast() -> None:
     if not clients:
         return
-    payload = json.dumps(engine.snapshot(now()), ensure_ascii=False)
-    for ws in list(clients):
+    full, public = snapshots(now())
+    payloads = {True: json.dumps(full, ensure_ascii=False), False: json.dumps(public, ensure_ascii=False)}
+    for ws, is_full in list(clients.items()):
         try:
-            await ws.send_text(payload)
+            await ws.send_text(payloads[is_full])
         except Exception:
-            clients.discard(ws)
+            clients.pop(ws, None)
 
 
 async def on_message(channel: str, msg_id: int, t: float, text: str) -> None:
@@ -97,8 +113,34 @@ app.add_middleware(GZipMiddleware, minimum_size=2048)  # границы райо
 
 
 @app.get("/api/state")
-def state() -> JSONResponse:
-    return JSONResponse(engine.snapshot(now()))
+def state(dronchik_access: str | None = Cookie(default=None)) -> JSONResponse:
+    return JSONResponse(snapshot_for(access.is_full(dronchik_access)))
+
+
+class AccessBody(BaseModel):
+    code: str
+
+
+@app.post("/api/access")
+def access_login(body: AccessBody, request: Request) -> JSONResponse:
+    """Код доступа к подробной карте → подписанная cookie на 90 дней."""
+    ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
+    if not access.allow_attempt(ip):
+        raise HTTPException(status_code=429, detail="слишком много попыток, подождите 10 минут")
+    token = access.check_code(body.code)
+    if not token:
+        raise HTTPException(status_code=403, detail="неверный код")
+    resp = JSONResponse({"mode": "full"})
+    resp.set_cookie(COOKIE, token, max_age=COOKIE_MAX_AGE, httponly=True, samesite="lax",
+                    secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https")
+    return resp
+
+
+@app.post("/api/logout")
+def access_logout() -> JSONResponse:
+    resp = JSONResponse({"mode": "public"})
+    resp.delete_cookie(COOKIE)
+    return resp
 
 
 @app.get("/api/regions")
@@ -116,8 +158,10 @@ def health() -> dict:
 
 
 @app.get("/api/heatmap")
-async def heatmap_api(days: int = 7) -> dict:
+async def heatmap_api(days: int = 7, dronchik_access: str | None = Cookie(default=None)) -> dict:
     """Где чаще всего фиксировали БПЛА за период (1–30 дней) — без работы ПВО и сбитий."""
+    if not access.is_full(dronchik_access):
+        raise HTTPException(status_code=403, detail="история пролётов доступна только по коду доступа")
     if not settings.publish.get("heatmap", True):
         raise HTTPException(status_code=404, detail="тепловая карта отключена (PUBLISH_HEATMAP=0)")
     return await asyncio.to_thread(heatmap.build, days)
@@ -148,7 +192,7 @@ def places() -> list[dict]:
 def config_js() -> Response:
     cfg = {"maptilerKey": settings.maptiler_key, "maptilerStyle": settings.maptiler_style, "demo": settings.demo, "timeScale": clock.speed if clock else 1,
            "channels": [{"channel": c["channel"].lstrip("@"), "note": c.get("note", "")} for c in settings.channels],
-           "termsVersion": settings.terms_version, "operator": settings.operator, "contact": settings.contact}
+           "termsVersion": settings.terms_version, "accessCodes": bool(access.codes) and not access.public_full, "operator": settings.operator, "contact": settings.contact}
     return Response(f"window.APP_CONFIG = {json.dumps(cfg)};", media_type="application/javascript")
 
 
@@ -174,15 +218,16 @@ async def ingest(body: IngestBody, authorization: str = Header(default="")) -> d
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()
-    clients.add(ws)
+    is_full = access.is_full(ws.cookies.get(COOKIE))
+    clients[ws] = is_full
     try:
-        await ws.send_text(json.dumps(engine.snapshot(now()), ensure_ascii=False))
+        await ws.send_text(json.dumps(snapshot_for(is_full), ensure_ascii=False))
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
         pass
     finally:
-        clients.discard(ws)
+        clients.pop(ws, None)
 
 
 app.mount("/", StaticFiles(directory=ROOT / "static", html=True), name="static")

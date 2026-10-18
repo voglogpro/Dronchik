@@ -34,7 +34,7 @@
         </li>
         <li>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c3-8 7-12 14-14"/><path d="M15 5h4v4"/></svg>
-          <div><b>Всё, что нарисовано на карте, — анимация.</b> Значки дронов, их движение, линии и время подлёта рассчитаны по текстам сообщений и средней скорости. Это не радар и не настоящее положение объектов.</div>
+          <div><b>Всё, что нарисовано на карте, — схема и анимация.</b> Заливка областей и значки строятся автоматически по текстам сообщений каналов. Это не радар и не настоящее положение объектов; карта ничем не управляет и ни на что не влияет.</div>
         </li>
         <li>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/></svg>
@@ -98,6 +98,17 @@
         <button id="notify-btn" class="btn" hidden>Включить уведомления</button>
       </section>
 
+      <section id="access-section" class="access" hidden>
+        <h2>Подробная карта</h2>
+        <p id="access-text" class="sub"></p>
+        <form id="access-form" class="access-form">
+          <input id="access-code" type="password" autocomplete="off" placeholder="Код доступа" aria-label="Код доступа">
+          <button type="submit" class="btn">Войти</button>
+        </form>
+        <p id="access-error" class="access-error" role="alert" hidden></p>
+        <button type="button" id="access-logout" class="btn" hidden>Вернуться к публичной карте</button>
+      </section>
+
       <details id="forecast" class="forecast" hidden>
         <summary>Прогноз обстановки <span id="forecast-meta" class="sub"></span></summary>
         <p id="forecast-text"></p>
@@ -108,7 +119,7 @@
         <ul id="alert-list" class="list"></ul>
       </section>
 
-      <section>
+      <section data-layer="tracks">
         <h2>Цели и прогноз маршрута</h2>
         <ul id="track-list" class="list"></ul>
       </section>
@@ -159,9 +170,10 @@
     <button type="button" class="legend-toggle" id="legend-toggle" aria-expanded="false">Легенда</button>
     <span><i class="sw sw-missile"></i>Ракетная опасность</span>
     <span><i class="sw sw-uav"></i>Угроза БПЛА</span>
+    <span><i class="sw sw-warn"></i>Внимание по БПЛА (жёлтый уровень)</span>
     <span data-layer="tracks"><i class="sw sw-predicted"></i>Вероятный подлёт ≤ 60 мин</span>
-    <span><i class="sw sw-district"></i>Район с фиксацией</span>
-    <span><i class="lg-alert">!</i>Опасность, цель не зафиксирована</span>
+    <span><i class="sw sw-district"></i>Район, указанный в сообщении</span>
+    <span><i class="lg-alert">!</i>Объявлена опасность</span>
     <span data-layer="tracks"><i class="lg-drone"></i>БПЛА, курс по фиксациям</span>
     <span data-layer="tracks"><i class="lg-drone-unknown">?</i>БПЛА, одна фиксация — курс неизвестен</span>
     <span data-layer="air_defense"><i class="lg-scope"></i>Работа ПВО</span>

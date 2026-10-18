@@ -24,6 +24,7 @@ SIGHTING = "sighting"
 DESTROYED = "destroyed"
 ENGAGED = "engaged"  # «работа ПВО» — цель под огнём, но не сбита
 HEADING = "heading"  # «ещё один в сторону Корочи» — курс без точки обнаружения
+UAV_WARN = "uav_warn"  # «жёлтый уровень»: внимание по БПЛА, ещё не тревога
 
 RX_CLEAR = re.compile(r"отбо[йяе]|угроз\w*\s+миновал|опасност\w*\s+миновал|отмен\w*\s+(?:угроз|опасн|тревог|режим)"
     r"|режим\w*(?:\s+\w+){0,3}\s+(?:снят|отменен)|снят\w*\s+режим")
@@ -118,7 +119,9 @@ def _split_targets(line: str, mentions: list[Mention]) -> tuple[list[Mention], M
     return [x for x in mentions if x not in seen], target
 
 
-RX_STATUS = re.compile("|".join(rx.pattern for rx in (RX_CLEAR, RX_MISSILE, RX_UAV_ALERT, RX_DRONE, RX_DESTROYED, RX_ENGAGED)))
+# «Жёлтый уровень опасности по БПЛА» (баннер «Купола России») — внимание, ещё не тревога
+RX_WARN = re.compile(r"ж[её]лт\w*\s+уров")
+RX_STATUS = re.compile("|".join(rx.pattern for rx in (RX_CLEAR, RX_WARN, RX_MISSILE, RX_UAV_ALERT, RX_DRONE, RX_DESTROYED, RX_ENGAGED)))
 
 
 def _lines(text: str, gaz: Gazetteer) -> list[str]:
@@ -171,6 +174,11 @@ class MessageParser:
             if RX_CLEAR.search(line):
                 # «Отбой по ранее объявленным регионам» без региона — снимает всё, что объявлял этот канал
                 events.append(Event(CLEAR, line_regions, district_ids, scope=_clear_scope(line), text=raw_line.strip()))
+                continue
+
+            if RX_WARN.search(line):
+                if line_regions:
+                    events.append(Event(UAV_WARN, line_regions, district_ids, text=raw_line.strip()))
                 continue
 
             line_alert = False

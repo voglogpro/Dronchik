@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from .forecast import ForecastParser
 from .gazetteer import Gazetteer, normalize
 from .launches import RX_LAUNCH, LaunchBoard, LaunchDetector
-from .parser import RX_FORECAST, CLEAR, DESTROYED, ENGAGED, HEADING, MISSILE_ALERT, SIGHTING, UAV_ALERT, MessageParser
+from .parser import RX_FORECAST, CLEAR, DESTROYED, ENGAGED, HEADING, MISSILE_ALERT, SIGHTING, UAV_ALERT, UAV_WARN, MessageParser
 from .tracker import TRACK_TTL_S, Tracker
 
 UAV_ALERT_TTL_S = 2 * 3600       # каналы часто забывают писать «отбой»
@@ -22,13 +22,13 @@ ENGAGED_SHOW_S = 10 * 60         # «под прицелом ПВО» — пок
 @dataclass
 class RegionAlert:
     since: float
-    levels: dict[str, float] = field(default_factory=dict)  # uav / missile -> время последнего подтверждения
+    levels: dict[str, float] = field(default_factory=dict)  # missile / uav / warn -> время последнего подтверждения
     channels: set[str] = field(default_factory=set)        # кто объявил — для «отбоя по ранее объявленным»
     announced: bool = False  # опасность объявлена текстом («Опасность по БПЛА»), а не выведена из фиксации
 
     @property
     def status(self) -> str:
-        return "missile" if "missile" in self.levels else "uav"
+        return "missile" if "missile" in self.levels else "uav" if "uav" in self.levels else "warn"
 
     @property
     def updated(self) -> float:
@@ -36,7 +36,9 @@ class RegionAlert:
 
     def clear(self, scope: str, t: float) -> None:
         """«Отбой ракетной опасности» снимает только ракетную, «отбой по БПЛА» — только БПЛА."""
-        for level in ([scope] if scope != "all" else list(self.levels)):
+        # «жёлтый уровень» — та же опасность по БПЛА, только слабее: снимается вместе с ней
+        levels = list(self.levels) if scope == "all" else ["uav", "warn"] if scope == "uav" else [scope]
+        for level in levels:
             if level in self.levels and t >= self.levels[level]:
                 del self.levels[level]
 
@@ -111,6 +113,12 @@ class Engine:
                     if status == "uav" and "uav" not in getattr(self.district_alerts.get(did), "levels", {}):
                         self.tracker.steer_to_alert(did, t)
                     self._raise(self.district_alerts, did, status, t, channel, announced=True)
+            elif ev.kind == UAV_WARN:
+                # «жёлтый уровень»: внимание. Красный уровень и тревога не понижаются
+                for rid in ev.region_ids:
+                    self._raise(self.alerts, rid, "warn", t, channel, announced=True)
+                for did in ev.district_ids:
+                    self._raise(self.district_alerts, did, "warn", t, channel, announced=True)
             elif ev.kind == SIGHTING:
                 self.tracker.add_sighting(ev.place, t, channel, ev.count, ev.target, ev.bearing)
                 self._raise(self.alerts, ev.place.region_id, "uav", t, channel)
@@ -170,7 +178,7 @@ class Engine:
         alert.levels[status] = max(alert.levels.get(status, t), t)
 
     def expire(self, now: float) -> None:
-        ttl = {"missile": MISSILE_ALERT_TTL_S, "uav": UAV_ALERT_TTL_S}
+        ttl = {"missile": MISSILE_ALERT_TTL_S, "uav": UAV_ALERT_TTL_S, "warn": UAV_ALERT_TTL_S}
         for rid, alert in list(self.alerts.items()):
             alert.levels = {lvl: ts for lvl, ts in alert.levels.items() if now - ts <= ttl[lvl]}
             if not alert.levels:
@@ -253,27 +261,44 @@ class Engine:
                 "launches": launches if pub.launches else [],
                 "forecast": forecast,
                 "health": self.health,
-                "feed": list(self.feed) if pub.feed else [], "publish": pub.__dict__}
+                "feed": list(self.feed) if pub.feed else [], "publish": dict(pub.__dict__), "mode": "full"}
 
-    def _alert_marks(self, now: float) -> list[dict]:
+    def public_snapshot(self, now: float, full: dict | None = None) -> dict:
+        """Публичная карта: только области и районы с объявленной опасностью и значки «!» —
+        как официальные оповещения. Без значков дронов, маршрутов, прогнозов подлёта, ПВО, пусков
+        и истории пролётов: это видят только владельцы кода доступа."""
+        snap = dict(full or self.snapshot(now))
+        snap["regions"] = {k: v for k, v in snap["regions"].items() if v["status"] != "predicted"}
+        snap["districts"] = {k: v for k, v in snap["districts"].items() if v["status"] != "predicted"}
+        snap["tracks"], snap["shootdowns"], snap["launches"] = [], [], []
+        snap["alert_marks"] = self._alert_marks(now, everywhere=True)
+        if snap.get("forecast"):
+            snap["forecast"] = {**snap["forecast"], "vectors": []}
+        snap["publish"] = {**snap["publish"], "tracks": False, "air_defense": False, "launches": False, "heatmap": False}
+        snap["mode"] = "public"
+        return snap
+
+    def _alert_marks(self, now: float, everywhere: bool = False) -> list[dict]:
         """Значки «!» там, где канал объявил опасность, но конкретной цели нет.
 
         Объявлена опасность по району — значок в центре района, по области — в её центре.
         Где уже нарисована цель, значок не нужен; районы, где цель просто пролетела, — тоже.
+        everywhere=True (публичная карта, целей нет): значок у каждой опасности, и объявленной, и по фиксации.
+        «Жёлтый уровень» значка не получает — только заливку.
         """
-        active = [tr for tr in self.tracker.active(now)]
+        active = [] if everywhere else self.tracker.active(now)
         busy_districts = {tr.last.district_id for tr in active}
         busy_regions = {tr.last.region_id for tr in active}
         marks, regions_with_marks = [], set()
         for did, a in self.district_alerts.items():
             d = self.gaz.districts[did]
-            if not a.announced or did in busy_districts:
+            if (not a.announced and not everywhere) or did in busy_districts or a.status == "warn":
                 continue
             regions_with_marks.add(d.region_id)
             marks.append({"lat": d.center[0], "lon": d.center[1], "level": a.status, "name": d.name,
                           "region": d.region_id, "district": did, "channels": sorted(a.channels), "updated": a.updated})
         for rid, a in self.alerts.items():
-            if not a.announced or rid in regions_with_marks or rid in busy_regions:
+            if (not a.announced and not everywhere) or rid in regions_with_marks or rid in busy_regions or a.status == "warn":
                 continue
             r = self.gaz.regions[rid]
             marks.append({"lat": r.center[0], "lon": r.center[1], "level": a.status, "name": r.name,

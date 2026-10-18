@@ -37,6 +37,11 @@ class Settings:
     terms_version: str = "2026-10-18"  # смена значения заново показывает окно согласия всем
     operator: str = ""
     contact: str = ""
+    # Кто видит подробную карту (дроны, маршруты, ПВО, пуски, тепловая карта).
+    # По умолчанию — только владельцы кода доступа (ACCESS_CODES), остальным — только тревоги по регионам.
+    public_level: str = "alerts"            # PUBLIC_LEVEL: alerts | full
+    access_codes: list[str] = field(default_factory=list)
+    access_secret: str = ""
 
     @property
     def telegram_enabled(self) -> bool:
@@ -78,6 +83,9 @@ def load_settings() -> Settings:
         terms_version=os.environ.get("TERMS_VERSION", "2026-10-18"),
         operator=os.environ.get("OPERATOR_NAME", ""),
         contact=os.environ.get("OPERATOR_CONTACT", ""),
+        public_level="full" if os.environ.get("PUBLIC_LEVEL", "alerts").lower() == "full" else "alerts",
+        access_codes=[c.strip() for c in os.environ.get("ACCESS_CODES", "").split(",") if len(c.strip()) >= 8],
+        access_secret=os.environ.get("ACCESS_SECRET", ""),
     )
     demo = os.environ.get("DEMO", "auto").lower()
     s.demo = demo in ("1", "true", "yes") or (demo == "auto" and not s.channels)

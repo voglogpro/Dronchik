@@ -14,5 +14,6 @@
   {"channel": "radar_orei", "region": "oryol-oblast", "note": "Радар Орёл"},
   {"channel": "Radar_Moscow_99", "region": "moscow-oblast", "note": "Радар. Москва и область"},
   {"channel": "radar_lipetskk", "region": "lipetsk-oblast", "note": "Радар Липецк"},
-  {"channel": "radar_ru_smolensk", "region": "smolensk-oblast", "note": "Радар.ру — Смоленская область"}
+  {"channel": "radar_ru_smolensk", "region": "smolensk-oblast", "note": "Радар.ру — Смоленская область"},
+  {"channel": "kupolrussia", "region": null, "note": "Купол России — уровни опасности картинкой: красный — тревога, жёлтый — внимание"}
 ]

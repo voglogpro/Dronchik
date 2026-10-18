@@ -4,3 +4,4 @@ websockets>=12
 shapely>=2.0
 telethon>=1.36
 httpx>=0.27
+pillow>=10

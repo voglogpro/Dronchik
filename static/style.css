@@ -57,6 +57,7 @@ select, .btn {
 .btn:hover { border-color: var(--accent); }
 .my-status { margin-top: 8px; padding: 10px 12px; border-radius: 8px; font-size: 14px; background: rgba(61, 214, 140, .12); color: var(--ok); }
 .my-status.uav { background: rgba(242, 118, 46, .15); color: var(--uav); }
+.my-status.warn { background: rgba(239, 224, 138, .14); color: #efe08a; }
 .my-status.missile { background: rgba(229, 72, 77, .18); color: var(--missile); }
 .my-status.predicted { background: rgba(245, 194, 76, .15); color: var(--predicted); }
 
@@ -68,6 +69,7 @@ select, .btn {
 .badge { font-size: 11px; padding: 2px 7px; border-radius: 99px; white-space: nowrap; font-weight: 600; }
 .badge.missile { background: var(--missile); color: #fff; }
 .badge.uav { background: var(--uav); color: #1a1004; }
+.badge.warn { background: #efe08a; color: #1a1404; }
 .badge.predicted { background: var(--predicted); color: #1a1404; }
 .sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
 .feed li { cursor: default; }
@@ -94,6 +96,14 @@ select, .btn {
 .sw { width: 14px; height: 10px; border-radius: 3px; display: inline-block; }
 .sw-district { background: var(--uav); box-shadow: inset 0 0 0 2px rgba(0, 0, 0, .35); }
 .sw-missile { background: var(--missile); } .sw-uav { background: var(--uav); } .sw-predicted { background: var(--predicted); }
+.sw-warn { background: #efe08a; }
+.access-form { display: flex; gap: 8px; margin-top: 8px; }
+.access-form input { flex: 1; min-width: 0; background: rgba(255, 255, 255, .05); color: var(--text); border: 1px solid var(--panel-border);
+  border-radius: 8px; padding: 9px 10px; font: inherit; }
+.access-form input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.access-form .btn { width: auto; margin-top: 0; }
+.access-error { color: var(--missile); font-size: 13px; margin: 6px 0 0; }
+.access #access-logout { margin-top: 8px; }
 .ln { width: 18px; height: 0; display: inline-block; border-top: 3px solid var(--track); }
 .ln-pred { border-top-style: dashed; border-top-color: var(--predicted); }
 .ln-launch { border-top: 2px dotted var(--launch); }

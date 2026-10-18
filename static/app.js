@@ -4,9 +4,9 @@
   const cfg = window.APP_CONFIG || {};
   const tg = window.Telegram && window.Telegram.WebApp;
   if (tg && tg.initData) { tg.ready(); tg.expand(); document.documentElement.classList.add("tg"); }
-  const COLORS = { missile: "#e5484d", uav: "#f2762e", predicted: "#f5c24c", launch: "#a99cf0", forecast: "#8fb3d9" };
-  const LABELS = { missile: "Ракетная опасность", uav: "Угроза БПЛА", predicted: "Вероятный подлёт" };
-  const SEVERITY = { missile: 3, uav: 2, predicted: 1 };
+  const COLORS = { missile: "#e5484d", uav: "#f2762e", warn: "#efe08a", predicted: "#f5c24c", launch: "#a99cf0", forecast: "#8fb3d9" };
+  const LABELS = { missile: "Ракетная опасность", uav: "Угроза БПЛА", warn: "Внимание по БПЛА", predicted: "Вероятный подлёт" };
+  const SEVERITY = { missile: 4, uav: 3, warn: 2, predicted: 1 };
   const BASIS = { target: "по заявленному курсу", observed: "по фиксациям", hint: "по направлению", alert: "по новой тревоге в соседней области" };
 
   const $ = (id) => document.getElementById(id);
@@ -63,9 +63,9 @@
   let shownRegionStatus = {};
   let shownDistrictStatus = {};
   const STATUS_FILL = (opacity) => ["match", ["coalesce", ["feature-state", "status"], "none"],
-    "missile", opacity.missile, "uav", opacity.uav, "predicted", opacity.predicted, 0];
+    "missile", opacity.missile, "uav", opacity.uav, "warn", opacity.warn ?? opacity.predicted, "predicted", opacity.predicted, 0];
   const STATUS_COLOR = ["match", ["coalesce", ["feature-state", "status"], "none"],
-    "missile", COLORS.missile, "uav", COLORS.uav, "predicted", COLORS.predicted, "#000"];
+    "missile", COLORS.missile, "uav", COLORS.uav, "warn", COLORS.warn, "predicted", COLORS.predicted, "#000"];
 
   const empty = () => ({ type: "FeatureCollection", features: [] });
 
@@ -324,7 +324,7 @@
       el.classList.toggle("uav", a.level !== "missile");
       el.setAttribute("aria-label", `${LABELS[a.level]}: ${a.name}`);
       return `<b>${esc(a.name)}</b><br><span style="color:${COLORS[a.level]}">${LABELS[a.level]}</span>`
-        + `<br><span class="sub">Цель не зафиксирована, обновлено ${ago(a.updated, state.now)}</span>`
+        + `<br><span class="sub">${state.mode === "public" ? "Сообщение канала" : "Цель не зафиксирована"}, обновлено ${ago(a.updated, state.now)}</span>`
         + (a.channels.length ? `<br><span class="sub">Источник: ${channelLinks(a.channels)}</span>` : "");
     });
     syncMarkers(shootMarkers, state.shootdowns || [], (x) => `${x.channel}/${x.msg_id}/${x.place}`, shootMarkEl, (el, x) => {
@@ -477,6 +477,30 @@
     return html;
   }
 
+  // Подробная карта по коду доступа; без кода — только тревоги по областям и районам
+  function renderAccess(state) {
+    const full = state.mode !== "public";
+    $("access-section").hidden = !(cfg.accessCodes || state.mode === "full");
+    $("access-text").textContent = full
+      ? "Включена подробная карта: значки дронов, маршруты, работа ПВО и пуски. Это расчётная анимация по сообщениям каналов, а не реальное положение. Не пересылайте её."
+      : "Открыта публичная карта: только области и районы, где каналы объявили опасность — как в официальных оповещениях. Подробный слой доступен по коду.";
+    $("access-form").hidden = full;
+    $("access-logout").hidden = !full || state.mode !== "full";
+  }
+  $("access-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const code = $("access-code").value.trim();
+    if (!code) return;
+    const r = await fetch("api/access", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) }).catch(() => null);
+    if (r && r.ok) { location.reload(); return; }
+    $("access-error").hidden = false;
+    $("access-error").textContent = r && r.status === 429 ? "Слишком много попыток. Подождите 10 минут." : "Неверный код.";
+  });
+  $("access-logout").addEventListener("click", async () => {
+    await fetch("api/logout", { method: "POST" }).catch(() => null);
+    location.reload();
+  });
+
   // Связь с каналами: «пусто на карте» не должно выглядеть как «угроз нет», если данные просто не приходят
   function renderHealth(state) {
     const bar = $("health-bar");
@@ -517,12 +541,17 @@
     const regions = Object.entries(state.regions).sort((a, b) =>
       (SEVERITY[b[1].status] - SEVERITY[a[1].status]) || ((a[1].eta_min ?? 0) - (b[1].eta_min ?? 0)));
     const active = state.tracks.filter((t) => t.status === "active");
-    const counts = { alert: regions.filter(([, r]) => r.status !== "predicted").length, pred: regions.filter(([, r]) => r.status === "predicted").length };
+    const counts = { alert: regions.filter(([, r]) => r.status === "uav" || r.status === "missile").length,
+      warn: regions.filter(([, r]) => r.status === "warn").length, pred: regions.filter(([, r]) => r.status === "predicted").length };
 
+    // в публичном режиме дронов нет — и счётчиков целей тоже
     $("summary").innerHTML = `
-      <div class="stat"><b>${counts.alert}</b><span>регионов с тревогой</span></div>
-      <div class="stat"><b>${active.reduce((s, t) => s + t.count, 0)}</b><span>целей в воздухе</span></div>
-      <div class="stat"><b>${counts.pred}</b><span>на пути подлёта</span></div>`;
+      <div class="stat"><b>${counts.alert}</b><span>регионов с тревогой</span></div>`
+      + (pub.tracks === false
+        ? `<div class="stat"><b>${counts.warn}</b><span>с режимом «внимание»</span></div>`
+        : `<div class="stat"><b>${active.reduce((s, t) => s + t.count, 0)}</b><span>целей в воздухе</span></div>
+      <div class="stat"><b>${counts.pred}</b><span>на пути подлёта</span></div>`);
+    renderAccess(state);
 
     const byRegion = {};
     for (const [id, d] of Object.entries(state.districts || {})) (byRegion[d.region] ||= []).push(d);
