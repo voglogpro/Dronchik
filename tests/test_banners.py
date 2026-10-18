@@ -122,3 +122,68 @@ def test_forecast_summary_drops_channel_ads(gaz):
     sm = ForecastParser(gaz).summary("ПРОГНОЗ ОБСТАНОВКИ на ночь\nОсобое внимание к тревогам.\n"
                                      "Радар по всей России - @radarrussiia\nhttps://max.ru/join/radarrussiia")
     assert sm["notes"] == ["Особое внимание к тревогам."]
+
+
+# ---- скачивание баннеров: CDN Telegram иногда отвечает 500 ----
+
+def _banner_page(posts):
+    blocks = []
+    for mid, text in posts:
+        blocks.append(
+            f'<div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message" data-post="ch/{mid}">'
+            f'<a class="tgme_widget_message_photo_wrap" style="background-image:url(\'https://cdn4.telesco.pe/file/img{mid}.jpg\')"></a>'
+            f'<div class="tgme_widget_message_text js-message_text" dir="auto">{text}</div>'
+            f'<a class="tgme_widget_message_date"><time datetime="2026-10-18T18:{mid % 60:02d}:00+00:00">x</time></a></div></div>')
+    return "".join(blocks)
+
+
+def _run_polls(ok_after, n_polls, posts=((101, "Тульская область"),)):
+    import asyncio
+    import httpx
+    from app import web_source
+
+    banner_bytes = (DATA / "banner_red.jpg").read_bytes()
+    calls = {"photo": 0}
+
+    def handler(request):
+        if request.url.host == "t.me":
+            return httpx.Response(200, text=_banner_page(posts))
+        calls["photo"] += 1
+        return httpx.Response(500) if calls["photo"] <= ok_after else httpx.Response(200, content=banner_bytes)
+
+    got, last_seen = [], {}
+    state = web_source.BannerState()
+
+    async def on_message(channel, msg_id, t, text):
+        got.append((msg_id, text))
+
+    async def main():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            for _ in range(n_polls):
+                await web_source.poll_channel(client, "ch", last_seen, on_message, 10**9, state)
+
+    real_sleep = web_source.asyncio.sleep
+    web_source.asyncio.sleep = lambda *_: real_sleep(0)
+    try:
+        asyncio.run(main())
+    finally:
+        web_source.asyncio.sleep = real_sleep
+    return got, state
+
+
+def test_banner_cdn_error_is_retried_on_next_poll():
+    # первый опрос: оба захода (обычный и «браузерный») падают с 500 — пост ждёт; второй опрос: картинка скачалась
+    got, _ = _run_polls(ok_after=2, n_polls=2)
+    assert got == [(101, "Тульская область — Красный уровень опасности по БПЛА")]
+
+
+def test_banner_cdn_down_does_not_block_forever():
+    got, _ = _run_polls(ok_after=10**6, n_polls=4)
+    assert [m for m, _ in got] == [101] and got[0][1] == "Тульская область"   # через 3 опроса разобран без статуса
+
+
+def test_banner_cdn_down_breaker_stops_waiting():
+    posts = tuple((100 + i, f"Область {i}") for i in range(5))
+    # три опроса подряд первый пост ждёт картинку; затем CDN считается недоступным и все посты разбираются сразу
+    got, state = _run_polls(ok_after=10**6, n_polls=3, posts=posts)
+    assert state.down and [m for m, _ in got] == [100, 101, 102, 103, 104]
