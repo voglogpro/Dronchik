@@ -42,7 +42,15 @@
   });
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
   // на телефоне нижнюю часть карты закрывает панель — центрируем по видимой области
-  if (window.innerWidth < 720) map.setPadding({ top: 70, bottom: Math.round(window.innerHeight * 0.45) + 50, left: 0, right: 0 });
+  const isPhone = () => window.innerWidth < 720;
+  // нижнюю часть карты (на телефоне) или левую (на компьютере) закрывает панель — центрируем по видимой области
+  function fitPadding() {
+    const collapsed = $("panel").classList.contains("collapsed");
+    const panel = $("panel").getBoundingClientRect();
+    map.setPadding(isPhone()
+      ? { top: 60, bottom: Math.round(collapsed ? panel.height : window.innerHeight * 0.45) + 20, left: 0, right: 0 }
+      : { top: 0, bottom: 0, left: collapsed ? 0 : Math.round(panel.right), right: 0 });
+  }
 
   let regionNames = {};
   let regionGeoms = {};
@@ -220,7 +228,9 @@
     map.getSource("fixes").setData(fc(fixes));
     for (const [id, m] of droneMarkers) if (!seen.has(id)) { m.remove(); droneMarkers.delete(id); }
     syncMarkers(alertMarkers, state.alert_marks || [], (a) => a.district || a.region, alertMarkEl, (el, a) => {
-      el.className = `alert-mark ${a.level}`;
+      // className не перезаписываем: MapLibre держит на элементе свой класс позиционирования
+      el.classList.toggle("missile", a.level === "missile");
+      el.classList.toggle("uav", a.level !== "missile");
       el.setAttribute("aria-label", `${LABELS[a.level]}: ${a.name}`);
       return `<b>${esc(a.name)}</b><br><span style="color:${COLORS[a.level]}">${LABELS[a.level]}</span>`
         + `<br><span class="sub">Цель не зафиксирована, обновлено ${ago(a.updated, state.now)}</span>`
@@ -244,7 +254,13 @@
   // Значки «!» (опасность без фиксации) и отметки сбития — тоже DOM-маркеры
   const alertMarkers = new Map();
   const shootMarkers = new Map();
-  const alertMarkEl = () => { const el = document.createElement("button"); el.type = "button"; el.textContent = "!"; return el; };
+  const alertMarkEl = () => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "alert-mark";
+    el.textContent = "!";
+    return el;
+  };
   const shootMarkEl = () => {
     const el = document.createElement("button");
     el.type = "button";
@@ -372,8 +388,8 @@
   function fitTo(coords) {
     if (!coords.length) return;
     const b = coords.reduce((acc, c) => acc.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
-    const wide = window.innerWidth >= 720;
-    map.fitBounds(b, { padding: wide ? { top: 60, bottom: 60, left: 400, right: 60 } : 40, maxZoom: 8, duration: 800 });
+    // место под панель уже учтено в map.setPadding (fitPadding)
+    map.fitBounds(b, { padding: 40, maxZoom: 8, duration: 800 });
   }
 
   // ---------- «моя область» и уведомления ----------
@@ -487,10 +503,21 @@
     $("legend-toggle").setAttribute("aria-expanded", String(open));
   });
 
-  $("panel-toggle").addEventListener("click", () => {
-    const p = $("panel");
-    p.classList.toggle("collapsed");
-    $("panel-toggle").setAttribute("aria-expanded", String(!p.classList.contains("collapsed")));
-    $("panel-toggle").textContent = p.classList.contains("collapsed") ? "▴" : "▾";
+  // Панель можно свернуть до одной строки, чтобы не закрывала карту; выбор запоминается
+  function setCollapsed(collapsed) {
+    $("panel").classList.toggle("collapsed", collapsed);
+    $("panel-toggle").setAttribute("aria-expanded", String(!collapsed));
+    $("panel-toggle").textContent = collapsed ? "Показать" : "Скрыть";
+    store.set("panelCollapsed", collapsed ? "1" : "");
+    requestAnimationFrame(fitPadding);
+  }
+  $("panel-toggle").addEventListener("click", (e) => {
+    e.stopPropagation();
+    setCollapsed(!$("panel").classList.contains("collapsed"));
   });
+  $("panel-head").addEventListener("click", () => {
+    if ($("panel").classList.contains("collapsed")) setCollapsed(false);
+  });
+  setCollapsed(store.get("panelCollapsed") === "1");
+  window.addEventListener("resize", fitPadding);
 })();

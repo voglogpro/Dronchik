@@ -69,7 +69,15 @@ select, .btn {
 .feed .text { white-space: pre-wrap; word-break: break-word; }
 
 .disclaimer { font-size: 11px; color: var(--muted); line-height: 1.45; margin-top: 18px; }
-.icon-btn { background: none; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; padding: 4px 8px; display: none; }
+.panel-toggle {
+  font: inherit; font-size: 13px; color: var(--text); background: #1b212b; cursor: pointer;
+  border: 1px solid var(--panel-border); border-radius: 99px; padding: 6px 12px;
+}
+.panel-toggle:hover, .panel-toggle:focus-visible { border-color: var(--accent); outline: none; }
+/* свёрнутая панель — одна строка с названием и статусом */
+#panel.collapsed { bottom: auto; }
+#panel.collapsed .panel-body { display: none; }
+#panel.collapsed .panel-head { border-bottom: 0; cursor: pointer; }
 
 .legend {
   position: fixed; z-index: 2;
@@ -155,8 +163,7 @@ hr.sep { border: 0; border-top: 1px solid var(--panel-border); margin: 8px 0; }
   }
   .demo-time { min-width: 0; }
   .maplibregl-ctrl-top-right { display: none; }
-  #panel.collapsed .panel-body { display: none; }
-  .icon-btn { display: block; }
+  #panel.collapsed { top: auto; bottom: 0; }
   .legend {
     top: calc(12px + env(safe-area-inset-top, 0px)); bottom: auto; right: auto;
     left: calc(12px + env(safe-area-inset-left, 0px)); max-width: calc(100% - 24px);

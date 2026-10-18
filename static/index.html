@@ -13,7 +13,7 @@
   <div id="map"></div>
 
   <aside id="panel" aria-label="Обстановка">
-    <header class="panel-head">
+    <header class="panel-head" id="panel-head">
       <div class="brand">
         <span class="logo" aria-hidden="true"></span>
         <div>
@@ -21,7 +21,7 @@
           <p id="status-line" class="muted">Подключение…</p>
         </div>
       </div>
-      <button id="panel-toggle" class="icon-btn" aria-label="Свернуть панель" aria-expanded="true">▾</button>
+      <button id="panel-toggle" class="panel-toggle" type="button" aria-controls="panel" aria-expanded="true">Скрыть</button>
     </header>
 
     <div class="panel-body">
