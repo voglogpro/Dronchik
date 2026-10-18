@@ -151,7 +151,9 @@ def _split_targets(line: str, mentions: list[Mention]) -> tuple[list[Mention], M
         # «в направлении Льгов, Курчатов»: все места через запятую или «и» — куда летит, а не где замечен
         chain = [after[0]]
         for x in sorted((x for x in mentions if x.start > after[0].end), key=lambda x: x.start):
-            if re.fullmatch(r"[\s,;]*(?:и\s+)?(?:далее\s+)?", line[chain[-1].end:x.start]) and x.place.kind != "region":
+            # «в сторону Новохопёрск, возможно Борисоглебск», «на Курск, затем на Орёл»: запасные и следующие цели
+            if re.fullmatch(r"[\s,;/]*(?:(?:и|или|либо|возможно|вероятно|может быть|далее|затем|потом|примерно|в\s+т\.?\s?ч\.?|на|в\s+сторону|в\s+направлении)\s+)*",
+                            line[chain[-1].end:x.start]) and x.place.kind != "region":
                 chain.append(x)
             else:
                 break

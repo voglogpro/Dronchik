@@ -4,7 +4,7 @@
   const cfg = window.APP_CONFIG || {};
   const tg = window.Telegram && window.Telegram.WebApp;
   if (tg && tg.initData) { tg.ready(); tg.expand(); document.documentElement.classList.add("tg"); }
-  const COLORS = { flow: "#ffb347", track: "#ff5a5f", missile: "#e5484d", uav: "#f2762e", warn: "#efe08a", predicted: "#f5c24c", launch: "#a99cf0", forecast: "#8fb3d9" };
+  const COLORS = { flow: "#ffb347", track: "#ffa63d", casing: "#0b0e13", missile: "#e5484d", uav: "#f2762e", warn: "#efe08a", predicted: "#f5c24c", launch: "#a99cf0", forecast: "#8fb3d9" };
   const LABELS = { missile: "Ракетная опасность", uav: "Угроза БПЛА", warn: "Внимание по БПЛА", predicted: "Вероятный подлёт" };
   const SEVERITY = { missile: 4, uav: 3, warn: 2, predicted: 1 };
   const BASIS = { target: "по заявленному курсу", observed: "по фиксациям", hint: "по направлению", alert: "по новой тревоге в соседней области", inland: "вероятно, вглубь страны от границы" };
@@ -117,6 +117,31 @@
       id: "regions-line", type: "line", source: "regions",
       paint: { "line-color": "#7a8697", "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.5, 8, 1.6], "line-opacity": 0.8 },
     }, before);
+    // контур области или района с тревогой — яркой линией со свечением, как на референсе
+    const OUTLINE = (m, u, w, p, none = 0) => ["match", ["coalesce", ["feature-state", "status"], "none"], "missile", m, "uav", u, "warn", w, "predicted", p, none];
+    map.addLayer({
+      id: "regions-alert-glow", type: "line", source: "regions", layout: { "line-join": "round" },
+      paint: { "line-color": OUTLINE("#ff5a5f", "#ff9a3d", "#efe08a", "#f5c24c", "rgba(0,0,0,0)"), "line-blur": 4,
+        "line-width": OUTLINE(9, 8, 6, 5), "line-opacity": 0.28 },
+    }, before);
+    map.addLayer({
+      id: "regions-alert-line", type: "line", source: "regions", layout: { "line-join": "round" },
+      paint: { "line-color": OUTLINE("#ff6b6f", "#ff9a3d", "#efe08a", "#f5c24c", "rgba(0,0,0,0)"),
+        "line-width": OUTLINE(2.6, 2.2, 1.6, 1.4), "line-opacity": 0.95 },
+    }, before);
+    map.addLayer({
+      id: "districts-alert-line", type: "line", source: "districts", minzoom: 5.5, layout: { "line-join": "round" },
+      paint: { "line-color": OUTLINE("#ff6b6f", "#ffb35c", "#efe08a", "#f5c24c", "rgba(0,0,0,0)"),
+        "line-width": OUTLINE(1.8, 1.5, 1.1, 1), "line-opacity": 0.9 },
+    }, before);
+    // названия областей: DOM-метки (на карте без своих шрифтов), видны на средних масштабах
+    for (const f of regions.features) {
+      if (!f.properties.center) continue;
+      const el = document.createElement("div");
+      el.className = "region-label";
+      el.textContent = shortRegionName(f.properties.name);
+      new maplibregl.Marker({ element: el, anchor: "top", offset: [0, 15] }).setLngLat([f.properties.center[1], f.properties.center[0]]).addTo(map);
+    }
     if (!cfg.maptilerKey) addCityLabels(places);
     // фон: области Украины (только границы) и места, откуда обычно идут пуски
     const [neighbors, origins] = await Promise.all([
@@ -182,32 +207,49 @@
           0, "rgba(0,0,0,0)", 0.15, "#3b2a6b", 0.4, "#8e3b8f", 0.65, "#e0663a", 0.9, "#f5c24c", 1, "#fff3c4"],
       },
     }, "launch-routes");
-    map.addSource("origins", { type: "geojson", data: empty() });
-    map.addSource("predicted", { type: "geojson", data: empty() });
-    map.addSource("observed", { type: "geojson", data: empty() });
-    map.addSource("fixes", { type: "geojson", data: empty() });
+    for (const id of ["origins", "predicted", "observed", "arrows", "fixes"]) map.addSource(id, { type: "geojson", data: empty() });
+    map.addImage("route-arrow", routeArrowImage());
 
+    // Маршруты как у «потока»: тёмная подложка, свечение и пунктир одного оранжевого цвета, стрелки по направлению.
+    const casing = (id, source, extra = {}) => map.addLayer({
+      id, type: "line", source, layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": COLORS.casing, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 3.2, 8, 6], "line-opacity": 0.5, ...extra },
+    });
     // примерный путь от границы Украины до первой фиксации — тонкий пунктир под остальными линиями цели
     map.addLayer({
-      id: "origins", type: "line", source: "origins",
-      layout: { "line-cap": "round" },
-      paint: { "line-color": COLORS.track, "line-width": 1.4, "line-dasharray": [1, 2.2],
-        "line-opacity": ["case", ["==", ["get", "status"], "active"], ["case", ["get", "single"], 0.3, 0.55], 0.25] },
+      id: "origins", type: "line", source: "origins", layout: { "line-cap": "round" },
+      paint: { "line-color": COLORS.track, "line-width": 1.3, "line-dasharray": [1, 2.4],
+        "line-opacity": ["case", ["==", ["get", "status"], "active"], ["case", ["get", "single"], 0.28, 0.5], 0.22] },
+    });
+    casing("observed-casing", "observed", { "line-opacity": ["case", ["==", ["get", "status"], "active"], 0.5, 0.2] });
+    casing("predicted-casing", "predicted", { "line-opacity": ["case", ["get", "weak"], 0.2, 0.4] });
+    map.addLayer({
+      id: "observed-glow", type: "line", source: "observed", layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": COLORS.track, "line-blur": 3, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 5, 8, 11],
+        "line-opacity": ["case", ["==", ["get", "status"], "active"], 0.2, 0.07] },
     });
     map.addLayer({
-      id: "predicted", type: "line", source: "predicted",
-      paint: { "line-color": COLORS.predicted, "line-width": 2, "line-dasharray": [2, 1.5], "line-opacity": ["case", ["get", "weak"], 0.45, 0.9] },
+      id: "predicted", type: "line", source: "predicted", layout: { "line-cap": "round" },
+      paint: { "line-color": COLORS.track, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1.6, 8, 2.6], "line-dasharray": [1.8, 1.6],
+        "line-opacity": ["case", ["get", "weak"], 0.4, 0.85] },
     });
     map.addLayer({
-      id: "observed", type: "line", source: "observed",
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": "#ff5a5f", "line-width": 2, "line-opacity": ["case", ["==", ["get", "status"], "active"], 0.95, 0.35] },
+      id: "observed", type: "line", source: "observed", layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": COLORS.track, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1.8, 8, 3], "line-dasharray": [4, 1.4],
+        "line-opacity": ["case", ["==", ["get", "status"], "active"], 0.95, 0.4] },
+    });
+    // стрелки вдоль линий показывают направление полёта
+    map.addLayer({
+      id: "route-arrows", type: "symbol", source: "arrows",
+      layout: { "symbol-placement": "line", "symbol-spacing": 70, "icon-image": "route-arrow", "icon-size": ["interpolate", ["linear"], ["zoom"], 3, 0.42, 8, 0.7],
+        "icon-allow-overlap": true, "icon-ignore-placement": true, "icon-rotation-alignment": "map", "icon-keep-upright": false },
+      paint: { "icon-opacity": ["case", ["get", "weak"], 0.45, 0.9] },
     });
     map.addLayer({
       id: "fixes", type: "circle", source: "fixes",
       paint: {
         "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 2, 8, 4.5],
-        "circle-color": "#ff5a5f", "circle-stroke-color": "#fff", "circle-stroke-width": 0.8,
+        "circle-color": COLORS.casing, "circle-stroke-color": COLORS.track, "circle-stroke-width": 1.6,
         "circle-opacity": ["case", ["==", ["get", "status"], "active"], 1, 0.4],
         "circle-stroke-opacity": ["case", ["==", ["get", "status"], "active"], 1, 0.4],
       },
@@ -229,8 +271,41 @@
     if (cfg.timelineUrl) playTimeline(cfg.timelineUrl); else connect();
   });
 
+  // «Курская область» → «КУРСКАЯ», «Республика Крым» → «КРЫМ»: коротко, чтобы помещалось в границах
+  const shortRegionName = (n) => n.replace(/^Республика\s+/i, "").replace(/\s+(область|край|автономный округ.*|автономная область)$/i, "")
+    .replace(/\s+республика$/i, "").replace(/-Югра$/, "");
+  // стрелка вдоль маршрута: оранжевый шеврон с тёмным контуром (рисуем на canvas — своих иконок и шрифтов у карты нет)
+  function routeArrowImage() {
+    const size = 32, c = document.createElement("canvas");
+    c.width = c.height = size;
+    const g = c.getContext("2d");
+    g.lineJoin = "round";
+    g.beginPath();
+    g.moveTo(8, 7); g.lineTo(25, 16); g.lineTo(8, 25); g.lineTo(13, 16); g.closePath();
+    g.fillStyle = COLORS.track; g.strokeStyle = COLORS.casing; g.lineWidth = 2.4;
+    g.stroke(); g.fill();
+    return g.getImageData(0, 0, size, size);
+  }
+  // сглаживание ломаной (Chaikin): путь по фиксациям читается как траектория, а не набор отрезков
+  function smooth(coords, rounds = 2) {
+    let pts = coords;
+    for (let r = 0; r < rounds && pts.length > 2; r++) {
+      const out = [pts[0]];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [a, b] = [pts[i], pts[i + 1]];
+        out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25], [a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+      }
+      out.push(pts[pts.length - 1]);
+      pts = out;
+    }
+    return pts;
+  }
   // порог, с которого значки опасности показываются по районам
-  const zoomFine = () => map.getContainer().classList.toggle("z-fine", map.getZoom() >= 6.3);
+  const zoomFine = () => {
+    const c = map.getContainer().classList, z = map.getZoom();
+    c.toggle("z-fine", z >= 6.3);
+    c.toggle("z-regionnames", z >= 4.2 && z < 7.4);
+  };
   map.on("zoom", zoomFine);
   map.on("load", zoomFine);
 
@@ -323,12 +398,16 @@
       }
     }
 
-    const predicted = [], observed = [], origins = [], fixes = [], seen = new Set();
+    const predicted = [], observed = [], origins = [], arrows = [], fixes = [], seen = new Set();
     for (const tr of state.tracks) {
       const coords = tr.points.map((p) => [p.lon, p.lat]);
       // у сбитой цели путь заканчивается там, где её сбили
       if (tr.end) coords.push([tr.end.lon, tr.end.lat]);
-      if (coords.length > 1) observed.push(line(coords, { status: tr.status }));
+      if (coords.length > 1) {
+        const sm = smooth(coords);
+        observed.push(line(sm, { status: tr.status }));
+        arrows.push(line(sm, { weak: false }));
+      }
       if (tr.origin) origins.push(line([[tr.origin.lon, tr.origin.lat], coords[0]], { status: tr.status, single: tr.points.length < 2 }));
       tr.points.forEach((p) => fixes.push(point([p.lon, p.lat], { status: tr.status })));
       if (tr.status !== "active") continue;
@@ -337,7 +416,10 @@
       const pos = pr ? [pr.path[0][1], pr.path[0][0]] : [last.lon, last.lat];
       if (pr) {
         // пунктир от последней фиксации: значок дрона едет по нему между обновлениями
-        predicted.push(line([[last.lon, last.lat], ...pr.path.map(([la, lo]) => [lo, la])], { weak: pr.basis === "inland" }));
+        const smPath = smooth([[last.lon, last.lat], ...pr.path.map(([la, lo]) => [lo, la])]);
+        predicted.push(line(smPath, { weak: pr.basis === "inland" }));
+        arrows.push(line(smPath, { weak: pr.basis === "inland" }));
+        smoothPath.set(tr.id, smPath);
       }
       seen.add(tr.id);
       placeDrone(tr, pos, pr ? pr.bearing : null, state.now);
@@ -345,6 +427,7 @@
     map.getSource("origins").setData(fc(origins));
     map.getSource("predicted").setData(fc(predicted));
     map.getSource("observed").setData(fc(observed));
+    map.getSource("arrows").setData(fc(arrows));
     map.getSource("fixes").setData(fc(fixes));
     for (const [id, m] of droneMarkers) if (!seen.has(id)) { m.remove(); droneMarkers.delete(id); droneMotion.delete(id); }
     const launches = state.launches || [];
@@ -574,9 +657,10 @@
     const k = Math.cos(((la1 + la2) / 2) * Math.PI / 180);
     return Math.hypot((lo2 - lo1) * k, la2 - la1) * 111.2;
   };
+  const smoothPath = new Map();   // id -> сглаженный прогноз: значок едет ровно по нарисованной линии
   function setMotion(id, pr) {
     if (!pr || pr.path.length < 2) { droneMotion.delete(id); return; }
-    const path = pr.path.map(([la, lo]) => [lo, la]);
+    const path = smoothPath.get(id) || pr.path.map(([la, lo]) => [lo, la]);
     const cum = [0];
     for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + kmBetween(path[i - 1], path[i]));
     droneMotion.set(id, { path, cum, speed: pr.speed, at: performance.now() });

@@ -154,9 +154,12 @@ def access_logout() -> JSONResponse:
     return resp
 
 
+_regions_json = json.dumps(gazetteer.regions_geojson(), ensure_ascii=False, separators=(",", ":"))
+
+
 @app.get("/api/regions")
-def regions() -> FileResponse:
-    return FileResponse(ROOT / "geodata" / "regions.geojson", media_type="application/geo+json")
+def regions() -> Response:
+    return Response(_regions_json, media_type="application/geo+json")
 
 
 @app.get("/api/health")

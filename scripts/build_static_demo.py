@@ -91,7 +91,7 @@ def main(out: str, maplibre_css: str, heatmap_json: str = "", key: str = "") -> 
     (out_dir / "heatmap.json").write_text(heat, encoding="utf-8")
     (out_dir / "terms.html").write_text((static / "terms.html").read_text(encoding="utf-8"), encoding="utf-8")
     (out_dir / "config.js").write_text(f"window.APP_CONFIG = {json.dumps(cfg)};", encoding="utf-8")
-    (out_dir / "regions.geojson").write_text((ROOT / "geodata" / "regions.geojson").read_text(encoding="utf-8"), encoding="utf-8")
+    (out_dir / "regions.geojson").write_text(json.dumps(Gazetteer().regions_geojson(), ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     (out_dir / "districts.geojson").write_text((ROOT / "geodata" / "districts.geojson").read_text(encoding="utf-8"), encoding="utf-8")
     (out_dir / "places.json").write_text(json.dumps(Gazetteer().map_labels(), ensure_ascii=False), encoding="utf-8")
     timeline = json.dumps(build_timeline(), ensure_ascii=False, separators=(",", ":"))

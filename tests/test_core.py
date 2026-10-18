@@ -377,3 +377,14 @@ def test_ballistic_is_faster_and_far_regions_are_not_drawn(gaz):
     # повторное сообщение в той же волне отсчёт не сбрасывает
     e.process("a", "Курская область\nРакетная опасность", T0 + 5 * 60, 4)
     assert {m["id"]: m for m in e.snapshot(T0 + 6 * 60)["missiles"]}["kursk-oblast"]["t0"] == T0
+
+
+def test_fixation_opposite_to_declared_target_is_another_drone(gaz):
+    """«Таловский район — от 3 БПЛА в сторону Новохопёрск»: фиксация к западу, в Бобровском районе, — другой дрон."""
+    e = Engine(gaz)
+    e.process("locatorru", "Таловский район, Воронежская область - от 3 БПЛА в сторону Новохопёрск, возможно Борисоглебск.", T0, 1)
+    e.process("locatorru", "Бобровский район\nВоронежская область\nФиксация БПЛА", T0 + 12 * 60, 2)
+    tracks = e.snapshot(T0 + 13 * 60)["tracks"]
+    assert len(tracks) == 2
+    first = next(t for t in tracks if t["points"][0]["place"] == "Таловский район")
+    assert len(first["points"]) == 1 and first["count"] == 3 and first["target"] == "Новохопёрск"

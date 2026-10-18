@@ -9,7 +9,7 @@
   --missile: #e5484d;
   --uav: #f2762e;
   --predicted: #f5c24c;
-  --track: #ff5a5f;
+  --track: #ffa63d;
   --accent: #4c9aff;
   --launch: #a99cf0;
   --ok: #3dd68c;
@@ -575,3 +575,15 @@ details.sec:not([open]) > summary h2 { margin-bottom: 6px; }
 .ln-missile { height: 0; border-top: 2px dashed var(--missile); }
 .badge.missile { background: var(--missile); color: #fff; }
 @media (prefers-reduced-motion: reduce) { .missile-mark.arrived svg { animation: none; } }
+
+
+/* ============ Как на референсе: названия областей, оранжевые маршруты ============ */
+.region-label { display: none; pointer-events: none; font: 600 10.5px/1 var(--font); letter-spacing: .1em; text-transform: uppercase;
+  color: rgba(214, 222, 234, .62); text-shadow: 0 0 4px #0a0d12, 0 0 3px #0a0d12; white-space: nowrap; text-align: center; }
+.z-regionnames .region-label { display: block; }
+.drone svg { filter: drop-shadow(0 0 5px rgba(255, 166, 61, .75)); }
+.drone path { fill: var(--track); stroke: #0b0e13; stroke-width: 1.6; }
+.drone.weak path { fill: rgba(255, 166, 61, .3); stroke: #ffa63d; }
+.drone.no-course .dot { border-color: var(--track); color: #a14b00; box-shadow: 0 0 6px rgba(255, 166, 61, .6); }
+.lg-drone-unknown { border-color: var(--track); color: #a14b00; }
+.lg-drone.lg-weak { border-bottom-color: rgba(255, 166, 61, .45); }

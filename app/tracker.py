@@ -60,6 +60,7 @@ BACK_DEG = 120.0            # движение к границе (угол к к
 FIRST_DEG = 90.0            # у цели с одной точкой у границы: следующая точка не дальше 90° от курса «вглубь»
 SIDE_DEG = 80.0             # у цели с курсом по 3+ точкам: поворот больше этого — другой дрон, а не манёвр
 SIDE_DEG_SHORT = 120.0      # по двум точкам курс ненадёжен (центры районов), допуск шире
+TARGET_BACK_DEG = 100.0     # у цели с заявленным направлением: фиксация дальше этого угла от курса — другой дрон
 SAME_SPOT_KM = 12.0         # в пределах этого расстояния — то же место, а не движение
 REVERSAL_DEG = 110.0
 REVERSAL_MIN_KM = 12.0
@@ -387,8 +388,11 @@ class Tracker:
             ref = bearing_deg(last.lat, last.lon, tr.target.lat, tr.target.lon)
         elif tr.bearing_hint is not None:
             ref = tr.bearing_hint
-        if ref is not None and angle_diff(v, ref) <= 60:
-            return False
+        if ref is not None:
+            if angle_diff(v, ref) <= 60:
+                return False
+            if angle_diff(v, ref) > TARGET_BACK_DEG:
+                return True      # заявлен курс на Новохопёрск, а фиксация в обратную сторону — другой дрон
         near_border = tr.inland is not None and (tr.border_km or 1e9) <= NEAR_BORDER_KM
         if near_border and angle_diff(v, tr.inland) > BACK_DEG:
             return True          # к границе — не продолжение

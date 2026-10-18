@@ -290,10 +290,11 @@ class Gazetteer:
                     found.append(Mention(m.start(), m.end(), matching[0]))
 
         scan_districts(self._district_res, need_context=False)
+        # села и посёлки из названного района раньше городских шаблонов: «Казанка» — село, а не город Казань
+        found += self._villages(text, norm, taken, found, context_region)
         scan(self._place_res)
         # названия-существительные («Ступино», «Донецк») слишком многозначны — только в известной области
         scan_districts(self._district_noun_res, need_context=not loose)
-        found += self._villages(text, norm, taken, found, context_region)
         found.sort(key=lambda x: x.start)
         return found
 
@@ -311,6 +312,15 @@ class Gazetteer:
                 taken[k] = True
             out.append(Mention(start, end, Place(it[0], rid, it[1], it[2], kind="city", district_id=did)))
         return out
+
+    def regions_geojson(self) -> dict:
+        """Границы регионов с точкой подписи (visual_center) — для названий областей на карте."""
+        data = json.loads((DATA_DIR / "regions.geojson").read_text(encoding="utf-8"))
+        for f in data["features"]:
+            region = self.regions.get(f["properties"]["id"])
+            if region:
+                f["properties"]["center"] = [round(region.center[0], 3), round(region.center[1], 3)]
+        return data
 
     def map_labels(self) -> list[dict]:
         """Города для подписей на карте; первый город региона в places.json — его центр."""

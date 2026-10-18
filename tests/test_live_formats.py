@@ -276,3 +276,14 @@ def test_list_of_districts_in_one_message_is_not_a_route(gaz):
     snap = e.snapshot(T0 + 60)
     # шесть одновременных фиксаций — шесть целей, а не один «маршрут» через все районы
     assert len(snap["tracks"]) == 6 and all(len(t["points"]) == 1 for t in snap["tracks"])
+
+
+def test_alternative_targets_are_not_positions(parser):
+    """«… в сторону Новохопёрск, возможно Борисоглебск» — оба пункта куда летят; дрон замечен в Таловском районе."""
+    events = _sightings(parser, "Таловский район, Воронежская область - от 3 БПЛА в сторону Новохопёрск, возможно Борисоглебск.")
+    assert [(e.place.name, e.target.name, e.count) for e in events] == [("Таловский район", "Новохопёрск", 3)]
+    events = _sightings(parser, "Таловский район, Воронежская область - пролёт БПЛА в сторону Курска, затем Орла.")
+    assert [(e.place.name, e.target.name) for e in events] == [("Таловский район", "Курск")]
+    # «Казанка» в названном районе — село, а не город Казань
+    (e,) = _sightings(parser, "Казанка, Таловский район, Воронежская область - пролёт БПЛА. Низко.")
+    assert e.place.name == "Казанка" and e.place.district_id.endswith("talovskiy-rayon")
