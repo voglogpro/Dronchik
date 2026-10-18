@@ -103,7 +103,7 @@ select, .btn {
 .launch-mark:focus-visible, .eta-mark:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .note { margin: 8px 0 0; line-height: 1.4; }
 
-.drone { position: relative; width: 30px; height: 30px; padding: 0; border: 0; background: none; cursor: pointer; }
+.drone { width: 30px; height: 30px; padding: 0; border: 0; background: none; cursor: pointer; }
 .drone svg { width: 30px; height: 30px; transition: transform .6s ease; filter: drop-shadow(0 0 6px rgba(255, 90, 95, .7)); }
 .drone path { fill: var(--track); stroke: #fff; stroke-width: 1.6; stroke-linejoin: round; }
 .drone.no-course svg { animation: pulse 1.6s ease-in-out infinite; }
