@@ -22,6 +22,7 @@ MISSILE_ALERT = "missile_alert"
 CLEAR = "clear"
 SIGHTING = "sighting"
 DESTROYED = "destroyed"
+ENGAGED = "engaged"  # «работа ПВО» — цель под огнём, но не сбита
 HEADING = "heading"  # «ещё один в сторону Корочи» — курс без точки обнаружения
 
 RX_CLEAR = re.compile(r"отбо[йяе]|угроз\w*\s+миновал|опасност\w*\s+миновал|отмен\w*\s+(?:угроз|опасн|тревог|режим)"
@@ -34,7 +35,8 @@ RX_UAV_ALERT = re.compile(
 )
 RX_DRONE = re.compile(r"бпла|беспилот|дрон|фпв|fpv|шахед|герань|мопед|🛵|ударн\w*\s+бла|(?<![а-я])бла(?![а-я])|цел[ьи](?![а-я])")
 RX_MOVE = re.compile(r"→|->|➡|курс|движ|летит|летят|пролет|пролёт|в сторону|направлен|замечен|фиксаци|зафиксир|обнаружен|в районе|над |шум|звук")
-RX_DESTROYED = re.compile(r"сбит|сбити|уничтож|подавлен|нейтрализ|отработал\w*\s+пво|работа\w*\s+пво")
+RX_DESTROYED = re.compile(r"сбит|сбити|уничтож|подавлен|нейтрализ|поражен")
+RX_ENGAGED = re.compile(r"работ\w*\s+(?:\w+\s+)?пво|пво\s+работа|отработал\w*\s+пво|звук\w*\s+(?:работы\s+)?пво|под прицел|отражени\w*\s+атак")
 RX_TARGET = re.compile(r"(?:курс\w*|движ\w*|летит|летят|направля\w*)\s+(?:на|в сторону|в направлении|к)\s+|в сторону\s+|в направлении\s+|\s*(?:→|->|➡️?)\s*")
 RX_COUNT = re.compile(r"(?<![\d:])(\d{1,3})\s*(?:х\s*)?(?:бпла|беспилот|дрон|шахед|герань|мопед|бла|цел)|(?:бпла|беспилот\w*|шахед\w*|цел\w*)\s*[x×х]\s*(\d{1,3})")
 RX_GROUP = re.compile(r"групп[аы]|несколько|рой|стая")
@@ -45,7 +47,9 @@ RX_BOILERPLATE = re.compile(r"подписат|наш\w* (?:тг|max|мах|ка
 # сводки и новости постфактум — не оперативная обстановка
 RX_REPORT = re.compile(r"за ночь|за сутки|прошедш\w* ноч|в течение ночи|дежурными силами|минобороны|по данным|сообщил"
                        r"|в результате|погиб|пострадав|поврежден|попал|предположительно прош|уничтожено \d|сбито \d|свыше \d"
-                       r"|напоминаем|не попадите|публикаци|меры (?:безопасности|предосторожности)$")
+                       r"|напоминаем|не попадите|публикаци")
+# строки-советы внутри оперативного сообщения («Меры безопасности») — выкидываем, остальное разбираем
+RX_ADVICE = re.compile(r"^(?:принять |соблюдайте |соблюдать )?меры (?:безопасности|предосторожности)\W*$|^отойдите от окон\W*$|^берегите себя\W*$")
 # реклама и служебные посты каналов — пропускаем сообщение целиком
 RX_PROMO = re.compile(r"принято решение создать|секретн\w* способ|антиглушилк|белых списк|₽|сделк|лицензи|розыгрыш|скидк")
 
@@ -112,7 +116,7 @@ def _split_targets(line: str, mentions: list[Mention]) -> tuple[list[Mention], M
     return [x for x in mentions if x not in seen], target
 
 
-RX_STATUS = re.compile("|".join(rx.pattern for rx in (RX_CLEAR, RX_MISSILE, RX_UAV_ALERT, RX_DRONE, RX_DESTROYED)))
+RX_STATUS = re.compile("|".join(rx.pattern for rx in (RX_CLEAR, RX_MISSILE, RX_UAV_ALERT, RX_DRONE, RX_DESTROYED, RX_ENGAGED)))
 
 
 def _lines(text: str, gaz: Gazetteer) -> list[str]:
@@ -121,7 +125,7 @@ def _lines(text: str, gaz: Gazetteer) -> list[str]:
     pending: list[str] = []
     for raw in re.split(r"[\n\r]+", text):
         line = RX_LINKS.sub("", normalize(raw)).strip(" \t-—–|/•")
-        if not line or RX_BOILERPLATE.search(line):
+        if not line or RX_BOILERPLATE.search(line) or RX_ADVICE.search(line):
             continue
         # короткая строка без статуса — «шапка» с местами («Дмитровский район», «Орловская область»)
         if not RX_STATUS.search(line) and not RX_MOVE.search(line) and len(line) <= 60 and gaz.find(line, None, loose=True):
@@ -173,7 +177,7 @@ class MessageParser:
                 events.append(Event(UAV_ALERT, line_regions, district_ids, text=raw_line.strip()))
                 line_alert = True
 
-            if RX_DRONE.search(line):
+            if RX_DRONE.search(line) or RX_ENGAGED.search(line):
                 drone_context = True
             elif not (drone_context and RX_MOVE.search(line)):
                 continue
@@ -183,9 +187,15 @@ class MessageParser:
             bearing = _direction_bearing(line)
             count = _count(line)
             target_place = target.place if target else None
-            if RX_DESTROYED.search(line):
+            destroyed, engaged = RX_DESTROYED.search(line), RX_ENGAGED.search(line)
+            if destroyed or engaged:
+                kind = DESTROYED if destroyed else ENGAGED
                 for m in cities:
-                    events.append(Event(DESTROYED, [m.place.region_id], [m.place.district_id], place=m.place, count=count, text=raw_line.strip()))
+                    events.append(Event(kind, [m.place.region_id], [m.place.district_id] if m.place.district_id else [],
+                                        place=m.place, count=count, text=raw_line.strip()))
+                if not cities and line_regions and not line_alert:
+                    # «сбития над Брянской областью» без места — угроза по области
+                    events.append(Event(UAV_ALERT, line_regions, district_ids, text=raw_line.strip()))
                 continue
             if cities and (RX_MOVE.search(line) or target or bearing is not None or not line_alert):
                 for m in cities:

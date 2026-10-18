@@ -113,8 +113,8 @@ def test_engine_flow(gaz):
     e = Engine(gaz)
     e.process("a", "⚠️ Угроза атаки БПЛА в Брянской области", T0)
     e.process("a", "🛵 БПЛА в районе Трубчевска", T0 + 60)
-    e.process("a", "🛵 БПЛА над Брянском", T0 + 25 * 60)
-    snap = e.snapshot(T0 + 26 * 60)
+    e.process("a", "🛵 БПЛА над Брянском", T0 + 31 * 60)
+    snap = e.snapshot(T0 + 32 * 60)
     assert snap["regions"]["bryansk-oblast"]["status"] == "uav"
     assert any(r["status"] == "predicted" for r in snap["regions"].values())
     assert len([t for t in snap["tracks"] if t["status"] == "active"]) == 1

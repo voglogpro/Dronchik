@@ -78,6 +78,7 @@ select, .btn {
   background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 10px 12px;
 }
 .legend span { display: flex; align-items: center; gap: 8px; }
+.legend-toggle { display: none; font: inherit; font-size: 12px; color: var(--text); background: none; border: 0; padding: 2px 4px; cursor: pointer; }
 .sw { width: 14px; height: 10px; border-radius: 3px; display: inline-block; }
 .sw-district { background: var(--uav); box-shadow: inset 0 0 0 2px rgba(0, 0, 0, .35); }
 .sw-missile { background: var(--missile); } .sw-uav { background: var(--uav); } .sw-predicted { background: var(--predicted); }
@@ -91,6 +92,22 @@ select, .btn {
 .drone span { position: absolute; left: 50%; top: 100%; transform: translateX(-50%); font: 600 12px/1 system-ui, sans-serif; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000; white-space: nowrap; }
 .drone:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 50%; }
 @keyframes pulse { 50% { opacity: .45; } }
+/* работа ПВО: вокруг цели вращается прицел */
+.drone .scope { display: none; position: absolute; inset: -9px; border: 2px dashed var(--missile); border-radius: 50%; animation: spin 3s linear infinite; }
+.drone.engaged .scope { display: block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.alert-mark {
+  width: 24px; height: 24px; padding: 0; border-radius: 50%; cursor: pointer;
+  font: 800 15px/22px system-ui, sans-serif; color: #1a1004; text-align: center;
+  border: 2px solid rgba(255, 255, 255, .85); box-shadow: 0 0 0 4px rgba(0, 0, 0, .25);
+}
+.alert-mark.uav { background: var(--uav); }
+.alert-mark.missile { background: var(--missile); color: #fff; animation: pulse 1.4s ease-in-out infinite; }
+.alert-mark:focus-visible, .shoot-mark:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shoot-mark { width: 26px; height: 26px; padding: 0; border: 0; background: none; cursor: pointer; }
+.shoot-mark svg { width: 26px; height: 26px; filter: drop-shadow(0 0 5px rgba(255, 200, 80, .8)); }
+.shoot-mark path { fill: #ffd25a; stroke: #7a3b00; stroke-width: 1; }
 
 .demo-bar {
   position: fixed; z-index: 3; left: 50%; transform: translateX(-50%);
@@ -102,7 +119,13 @@ select, .btn {
 .demo-time { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 9.5em; }
 .demo-bar button { font: inherit; font-size: 12px; color: var(--text); background: #1b212b; border: 1px solid var(--panel-border); border-radius: 99px; padding: 5px 10px; cursor: pointer; }
 .demo-bar button:hover, .demo-bar button:focus-visible { border-color: var(--accent); outline: none; }
-@media (prefers-reduced-motion: reduce) { .drone svg { transition: none; } .drone.no-course svg { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .drone svg { transition: none; } .drone.no-course svg, .drone .scope, .alert-mark.missile { animation: none; }
+}
+.lg-alert { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: var(--uav); color: #1a1004; font: 800 10px/14px system-ui, sans-serif; text-align: center; }
+.lg-drone { display: inline-block; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 13px solid var(--track); }
+.lg-scope { display: inline-block; width: 13px; height: 13px; border: 2px dashed var(--missile); border-radius: 50%; }
+.lg-shoot { display: inline-block; width: 13px; height: 13px; background: #ffd25a; clip-path: polygon(50% 0, 62% 35%, 100% 30%, 70% 55%, 90% 100%, 50% 72%, 10% 100%, 30% 55%, 0 30%, 38% 35%); }
 
 .city { display: none; align-items: center; gap: 5px; pointer-events: none; font: 500 11px/1 system-ui, sans-serif; color: #c9d1dc; text-shadow: 0 0 3px #0a0d12, 0 0 3px #0a0d12, 0 0 2px #0a0d12; white-space: nowrap; }
 .city i { width: 4px; height: 4px; border-radius: 50%; background: #9aa5b4; flex: none; }
@@ -137,6 +160,9 @@ hr.sep { border: 0; border-top: 1px solid var(--panel-border); margin: 8px 0; }
   .legend {
     top: calc(12px + env(safe-area-inset-top, 0px)); bottom: auto; right: auto;
     left: calc(12px + env(safe-area-inset-left, 0px)); max-width: calc(100% - 24px);
-    flex-direction: row; flex-wrap: wrap; column-gap: 12px; row-gap: 4px; font-size: 11px; padding: 8px 10px;
+    flex-direction: row; flex-wrap: wrap; column-gap: 12px; row-gap: 4px; font-size: 11px; padding: 6px 8px;
   }
+  .legend-toggle { display: block; }
+  .legend:not(.open) span { display: none; }
+  .legend.open .legend-toggle { width: 100%; text-align: left; }
 }

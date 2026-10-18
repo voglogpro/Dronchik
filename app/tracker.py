@@ -21,13 +21,18 @@ from .geo import angle_diff, bearing_deg, destination, haversine_km
 
 DEFAULT_SPEED_KMH = 150.0   # типичная крейсерская скорость ударного БПЛА самолётного типа
 MIN_SPEED_KMH = 60.0
-MAX_SPEED_KMH = 220.0
-GATE_BASE_KM = 35.0         # погрешность «в районе города»
+# Параметры подобраны на недельной истории каналов (scripts/replay_history.py): во время налёта
+# одновременно летят десятки БПЛА, и мягкая склейка собирает в один «трек» разные цели —
+# направление тогда угадывается в ~35% случаев. Строгая склейка даёт ~60% в пределах 45°.
+MAX_SPEED_KMH = 170.0
+GATE_BASE_KM = 15.0         # погрешность «в районе города / района» при склейке
 DUPLICATE_KM = 8.0          # та же точка от разных каналов
 DUPLICATE_WINDOW_S = 6 * 60
-TRACK_TTL_S = 45 * 60       # без новых фиксаций трек считается потерянным
+NEAR_KM = 40.0              # «сбитие / работа ПВО над X» относим к цели не дальше этого
+TRACK_TTL_S = 30 * 60       # без новых фиксаций трек считается потерянным
 SPEED_WINDOW_S = 40 * 60
 PREDICT_MINUTES = 60
+HINT_PREDICT_MINUTES = 20
 PREDICT_STEP_MIN = 5
 
 
@@ -51,6 +56,7 @@ class Track:
     bearing_hint: float | None = None
     status: str = "active"  # active | destroyed | lost
     count: int = 1
+    engaged_at: float | None = None  # когда последний раз сообщали о работе ПВО по этой цели
 
     @property
     def last(self) -> TrackPoint:
@@ -65,11 +71,15 @@ class Track:
         first = window[0]
         dist = haversine_km(first.lat, first.lon, last.lat, last.lon)
         dt_h = (last.t - first.t) / 3600
-        if dist > 5:
-            observed_bearing = bearing_deg(first.lat, first.lon, last.lat, last.lon)
-            # слишком близкие по времени сообщения дают нереалистичную скорость
-            if dt_h > 4 / 60:
-                speed = min(max(dist / dt_h, MIN_SPEED_KMH), MAX_SPEED_KMH)
+        # слишком близкие по времени сообщения дают нереалистичную скорость
+        if dist > 5 and dt_h > 4 / 60:
+            speed = min(max(dist / dt_h, MIN_SPEED_KMH), MAX_SPEED_KMH)
+        # курс — по последнему отрезку: после поворота («на Краснодар, затем на Ставрополь»)
+        # прогноз сразу следует новому направлению, а не среднему за всё время
+        prev = next((p for p in reversed(self.points[:-1])
+                     if haversine_km(p.lat, p.lon, last.lat, last.lon) > 5), None)
+        if prev is not None:
+            observed_bearing = bearing_deg(prev.lat, prev.lon, last.lat, last.lon)
         if self.target and haversine_km(last.lat, last.lon, self.target.lat, self.target.lon) > 5:
             return bearing_deg(last.lat, last.lon, self.target.lat, self.target.lon), speed, "target"
         if observed_bearing is not None:
@@ -147,19 +157,29 @@ class Tracker:
         track.target = target
         return track
 
-    def mark_destroyed(self, place: Place, t: float) -> Track | None:
+    def nearest(self, place: Place, t: float, radius_km: float = NEAR_KM) -> Track | None:
+        """Активная цель, которая сейчас (по прогнозу) ближе всего к месту."""
         candidates = []
         for tr in self.active(t):
             lat, lon = tr.position_at(t)
             d = haversine_km(lat, lon, place.lat, place.lon)
-            if d <= GATE_BASE_KM * 1.5:
+            if d <= radius_km:
                 candidates.append((d, tr))
-        if not candidates:
+        return min(candidates, key=lambda x: x[0])[1] if candidates else None
+
+    def mark_destroyed(self, place: Place, t: float) -> Track | None:
+        track = self.nearest(place, t)
+        if track is None:
             return None
-        _, track = min(candidates, key=lambda x: x[0])
         track.count -= 1
         if track.count <= 0:
             track.status = "destroyed"
+        return track
+
+    def mark_engaged(self, place: Place, t: float, source: str) -> Track:
+        """«Работа ПВО над Раменским»: цель там точно есть — берём ближайшую или заводим новую."""
+        track = self.nearest(place, t) or self.add_sighting(place, t, source)
+        track.engaged_at = t
         return track
 
     def clear_regions(self, region_ids: list[str], t: float) -> None:
@@ -191,7 +211,8 @@ class Tracker:
             tr_bearing, _, basis = tr.motion()
             if tr_bearing is not None and d_last > 10:
                 turn = angle_diff(tr_bearing, bearing_deg(tr.last.lat, tr.last.lon, place.lat, place.lon))
-                cost += 0.6 * max(turn - 60, 0) / 120  # резкий разворот маловероятен
+                # повороты на 60–90° у ударных БПЛА обычны (обход ПВО, смена цели); штрафуем только разворот
+                cost += 0.5 * max(turn - 100, 0) / 80
             if target and tr.target and tr.target.name == target.name:
                 cost *= 0.6
             if cost < best_cost:
@@ -215,7 +236,9 @@ class Tracker:
             return None
         start_lat, start_lon = track.position_at(now)
         elapsed_min = max(now - track.last.t, 0) / 60
-        horizon = max(PREDICT_MINUTES - elapsed_min, PREDICT_STEP_MIN)
+        # по одному слову «на север» без второй точки рисуем только короткий отрезок
+        full = HINT_PREDICT_MINUTES if basis == "hint" else PREDICT_MINUTES
+        horizon = max(full - elapsed_min, PREDICT_STEP_MIN)
         max_dist = speed * horizon / 60
         if track.target:
             max_dist = min(max_dist, haversine_km(start_lat, start_lon, track.target.lat, track.target.lon) + 15)
@@ -227,9 +250,11 @@ class Tracker:
             if dist >= max_dist:
                 break
 
-        half_angle = {"target": 10.0, "observed": 20.0, "hint": 30.0}[basis]
+        # ширина конуса — по реальной точности: по истории курс по фиксациям ошибается
+        # на 35° в медиане, поэтому конус заметно шире, чем при заявленной каналом цели
+        half_angle = {"target": 12.0, "observed": 30.0, "hint": 35.0}[basis]
         if basis == "observed" and len(track.points) >= 3:
-            half_angle = 15.0
+            half_angle = 25.0
         cone_left, cone_right = [], []
         for lat, lon in path[1:]:
             d = haversine_km(start_lat, start_lon, lat, lon)

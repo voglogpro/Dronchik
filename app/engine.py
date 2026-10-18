@@ -5,20 +5,23 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from .gazetteer import Gazetteer
-from .parser import CLEAR, DESTROYED, HEADING, MISSILE_ALERT, SIGHTING, UAV_ALERT, MessageParser
-from .tracker import Tracker
+from .parser import CLEAR, DESTROYED, ENGAGED, HEADING, MISSILE_ALERT, SIGHTING, UAV_ALERT, MessageParser
+from .tracker import TRACK_TTL_S, Tracker
 
 UAV_ALERT_TTL_S = 2 * 3600       # каналы часто забывают писать «отбой»
 MISSILE_ALERT_TTL_S = 3600
 DISTRICT_ALERT_TTL_S = 50 * 60   # район подсвечиваем, пока по нему свежие фиксации
 PREDICT_WARN_MINUTES = 60        # регион «жёлтый», если прогноз заходит в него в течение часа
 DISTRICT_PREDICT_WARN_MINUTES = 30  # для районов горизонт короче, иначе жёлтым красится полобласти
+SHOOTDOWN_SHOW_S = 40 * 60       # сколько показывать отметку сбития
+ENGAGED_SHOW_S = 10 * 60         # «под прицелом ПВО» — пока свежие сообщения о работе ПВО
 
 @dataclass
 class RegionAlert:
     since: float
     levels: dict[str, float] = field(default_factory=dict)  # uav / missile -> время последнего подтверждения
     channels: set[str] = field(default_factory=set)        # кто объявил — для «отбоя по ранее объявленным»
+    announced: bool = False  # опасность объявлена текстом («Опасность по БПЛА»), а не выведена из фиксации
 
     @property
     def status(self) -> str:
@@ -44,6 +47,7 @@ class Engine:
         self.alerts: dict[str, RegionAlert] = {}
         self.district_alerts: dict[str, RegionAlert] = {}
         self.feed: deque[dict] = deque(maxlen=60)
+        self.shootdowns: deque[dict] = deque(maxlen=200)
         self.version = 0
 
     def process(self, channel: str, text: str, t: float, msg_id: int | None = None) -> list:
@@ -66,9 +70,9 @@ class Engine:
             elif ev.kind in (UAV_ALERT, MISSILE_ALERT):
                 status = "missile" if ev.kind == MISSILE_ALERT else "uav"
                 for rid in ev.region_ids:
-                    self._raise(self.alerts, rid, status, t, channel)
+                    self._raise(self.alerts, rid, status, t, channel, announced=True)
                 for did in ev.district_ids:
-                    self._raise(self.district_alerts, did, status, t, channel)
+                    self._raise(self.district_alerts, did, status, t, channel, announced=True)
             elif ev.kind == SIGHTING:
                 self.tracker.add_sighting(ev.place, t, channel, ev.count, ev.target, ev.bearing)
                 self._raise(self.alerts, ev.place.region_id, "uav", t, channel)
@@ -76,13 +80,17 @@ class Engine:
                     self._raise(self.district_alerts, did, "uav", t, channel)
             elif ev.kind == HEADING:
                 self.tracker.add_heading(ev.region_ids, ev.target, t)
-            elif ev.kind == DESTROYED:
-                # «сбитие над Раменским» — значит, БПЛА там были: район и область под угрозой
-                self.tracker.mark_destroyed(ev.place, t)
+            elif ev.kind in (DESTROYED, ENGAGED):
+                # «сбитие / работа ПВО над Раменским» — значит, БПЛА там есть: район и область под угрозой
+                if ev.kind == DESTROYED:
+                    track = self.tracker.mark_destroyed(ev.place, t)
+                    self.shootdowns.append({"lat": ev.place.lat, "lon": ev.place.lon, "t": t, "place": ev.place.name,
+                                            "channel": channel, "msg_id": msg_id, "track": track.id if track else None})
+                else:
+                    self.tracker.mark_engaged(ev.place, t, channel)
                 self._raise(self.alerts, ev.place.region_id, "uav", t, channel)
                 for did in ev.district_ids:
-                    if did:
-                        self._raise(self.district_alerts, did, "uav", t, channel)
+                    self._raise(self.district_alerts, did, "uav", t, channel)
         self.feed.appendleft({
             "t": t, "channel": channel, "msg_id": msg_id, "text": text[:400],
             "kinds": sorted({e.kind for e in events}),
@@ -116,9 +124,11 @@ class Engine:
             self.tracker.clear_regions([k for k in cleared if k in self.gaz.regions], t)
 
     @staticmethod
-    def _raise(alerts: dict[str, RegionAlert], key: str, status: str, t: float, channel: str) -> None:
+    def _raise(alerts: dict[str, RegionAlert], key: str, status: str, t: float, channel: str,
+               announced: bool = False) -> None:
         alert = alerts.setdefault(key, RegionAlert(since=t))
         alert.channels.add(channel)
+        alert.announced |= announced
         alert.levels[status] = max(alert.levels.get(status, t), t)
 
     def expire(self, now: float) -> None:
@@ -148,8 +158,9 @@ class Engine:
         for tr in self.tracker.tracks:
             item = {
                 "id": tr.id,
-                "status": tr.status if tr.status != "active" or now - tr.last.t <= 45 * 60 else "lost",
+                "status": tr.status if tr.status != "active" or now - tr.last.t <= TRACK_TTL_S else "lost",
                 "count": max(tr.count, 1),
+                "engaged": tr.status == "active" and tr.engaged_at is not None and now - tr.engaged_at <= ENGAGED_SHOW_S,
                 "target": tr.target.name if tr.target else None,
                 "points": [
                     {"lat": p.lat, "lon": p.lon, "t": p.t, "place": p.place, "region": p.region_id,
@@ -182,8 +193,35 @@ class Engine:
         for did, info in districts.items():
             info["name"] = self.gaz.districts[did].name
             info["region"] = self.gaz.districts[did].region_id
+        shootdowns = [s for s in self.shootdowns if 0 <= now - s["t"] <= SHOOTDOWN_SHOW_S]
         return {"now": now, "version": self.version, "regions": regions, "districts": districts,
-                "tracks": tracks, "feed": list(self.feed)}
+                "tracks": tracks, "shootdowns": shootdowns, "alert_marks": self._alert_marks(now),
+                "feed": list(self.feed)}
+
+    def _alert_marks(self, now: float) -> list[dict]:
+        """Значки «!» там, где канал объявил опасность, но конкретной цели нет.
+
+        Объявлена опасность по району — значок в центре района, по области — в её центре.
+        Где уже нарисована цель, значок не нужен; районы, где цель просто пролетела, — тоже.
+        """
+        active = [tr for tr in self.tracker.active(now)]
+        busy_districts = {tr.last.district_id for tr in active}
+        busy_regions = {tr.last.region_id for tr in active}
+        marks, regions_with_marks = [], set()
+        for did, a in self.district_alerts.items():
+            d = self.gaz.districts[did]
+            if not a.announced or did in busy_districts:
+                continue
+            regions_with_marks.add(d.region_id)
+            marks.append({"lat": d.center[0], "lon": d.center[1], "level": a.status, "name": d.name,
+                          "region": d.region_id, "district": did, "channels": sorted(a.channels), "updated": a.updated})
+        for rid, a in self.alerts.items():
+            if not a.announced or rid in regions_with_marks or rid in busy_regions:
+                continue
+            r = self.gaz.regions[rid]
+            marks.append({"lat": r.center[0], "lon": r.center[1], "level": a.status, "name": r.name,
+                          "region": rid, "district": None, "channels": sorted(a.channels), "updated": a.updated})
+        return marks
 
     def _district_name(self, did: str | None) -> str | None:
         return self.gaz.districts[did].name if did else None

@@ -219,6 +219,19 @@
     map.getSource("observed").setData(fc(observed));
     map.getSource("fixes").setData(fc(fixes));
     for (const [id, m] of droneMarkers) if (!seen.has(id)) { m.remove(); droneMarkers.delete(id); }
+    syncMarkers(alertMarkers, state.alert_marks || [], (a) => a.district || a.region, alertMarkEl, (el, a) => {
+      el.className = `alert-mark ${a.level}`;
+      el.setAttribute("aria-label", `${LABELS[a.level]}: ${a.name}`);
+      return `<b>${esc(a.name)}</b><br><span style="color:${COLORS[a.level]}">${LABELS[a.level]}</span>`
+        + `<br><span class="sub">Цель не зафиксирована, обновлено ${ago(a.updated, state.now)}</span>`
+        + (a.channels.length ? `<br><span class="sub">Источник: ${channelLinks(a.channels)}</span>` : "");
+    });
+    syncMarkers(shootMarkers, state.shootdowns || [], (x) => `${x.channel}/${x.msg_id}/${x.place}`, shootMarkEl, (el, x) => {
+      const age = (state.now - x.t) / 60;
+      el.style.opacity = String(Math.max(0.35, 1 - age / 40));
+      return `<b>Сбитие: ${esc(x.place)}</b><br><span class="sub">${ago(x.t, state.now)} · `
+        + `<a href="${tgLink(x.channel, x.msg_id)}" target="_blank" rel="noopener">@${esc(x.channel)}</a></span>`;
+    });
 
     renderPanel(state);
     checkMyRegion(state);
@@ -228,6 +241,34 @@
   const point = (c, props) => ({ type: "Feature", properties: props, geometry: { type: "Point", coordinates: c } });
   const line = (c, props) => ({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: c } });
 
+  // Значки «!» (опасность без фиксации) и отметки сбития — тоже DOM-маркеры
+  const alertMarkers = new Map();
+  const shootMarkers = new Map();
+  const alertMarkEl = () => { const el = document.createElement("button"); el.type = "button"; el.textContent = "!"; return el; };
+  const shootMarkEl = () => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "shoot-mark";
+    el.setAttribute("aria-label", "Сбитие БПЛА");
+    el.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1l2.4 6.3L21 5l-3.3 5.6L23 13l-6 1.6 1.6 6.4-5.1-3.9L9.7 23l-.9-6.6L2 17.5l4.2-5.2L1 8.6l6.6-.6z"/></svg>`;
+    return el;
+  };
+  function syncMarkers(store, items, keyOf, makeEl, update) {
+    const keep = new Set();
+    for (const item of items) {
+      const key = keyOf(item);
+      keep.add(key);
+      let m = store.get(key);
+      if (!m) {
+        m = new maplibregl.Marker({ element: makeEl() }).setLngLat([item.lon, item.lat])
+          .setPopup(new maplibregl.Popup({ offset: 14, maxWidth: "280px" })).addTo(map);
+        store.set(key, m);
+      }
+      m.getPopup().setHTML(update(m.getElement(), item));
+    }
+    for (const [key, m] of store) if (!keep.has(key)) { m.remove(); store.delete(key); }
+  }
+
   // Цели рисуем DOM-маркерами: стрелка по курсу, число БПЛА рядом (без загрузки шрифтов для карты)
   const droneMarkers = new Map();
   function placeDrone(tr, pos, bearing, now) {
@@ -236,7 +277,7 @@
       const el = document.createElement("button");
       el.className = "drone";
       el.type = "button";
-      el.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 18-8-4.5L4 20z"/></svg><span></span>`;
+      el.innerHTML = `<i class="scope" aria-hidden="true"></i><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 18-8-4.5L4 20z"/></svg><span></span>`;
       m = new maplibregl.Marker({ element: el, rotationAlignment: "map" }).setLngLat(pos)
         .setPopup(new maplibregl.Popup({ offset: 14, maxWidth: "280px" })).addTo(map);
       droneMarkers.set(tr.id, m);
@@ -246,6 +287,7 @@
     el.setAttribute("aria-label", `Цель #${tr.id}`);
     el.querySelector("svg").style.transform = `rotate(${bearing ?? 0}deg)`;
     el.classList.toggle("no-course", bearing == null);
+    el.classList.toggle("engaged", !!tr.engaged);
     el.querySelector("span").textContent = tr.count > 1 ? `×${tr.count}` : "";
     m.getPopup().setHTML(trackPopup(tr, now));
   }
@@ -254,6 +296,8 @@
     const last = tr.points[tr.points.length - 1];
     const pr = tr.prediction;
     let html = `<b>Цель #${tr.id}${tr.count > 1 ? ` · ${tr.count} БПЛА` : ""}</b><br>`;
+    if (tr.engaged) html += `<span style="color:${COLORS.missile}">Работает ПВО</span><br>`;
+    if (!pr) html += `<span class="sub">Одна фиксация: курс неизвестен, маршрут появится со второй точки</span><br>`;
     html += `Последняя фиксация: ${esc(last.place)}${last.district_name && last.district_name !== last.place ? ` (${esc(last.district_name)})` : ""}, ${ago(last.t, now)}<br>`;
     html += `Точек: ${tr.points.length} · источники: ${channelLinks([...new Set(tr.points.flatMap((p) => p.sources))])}`;
     if (pr) {
@@ -437,6 +481,11 @@
     $("sources-section").hidden = false;
     $("sources").innerHTML = cfg.channels.map((c) => `<li><a href="${tgLink(c.channel)}" target="_blank" rel="noopener">@${esc(c.channel)}</a>${c.note ? `<div class="sub">${esc(c.note)}</div>` : ""}</li>`).join("");
   }
+
+  $("legend-toggle").addEventListener("click", () => {
+    const open = $("legend").classList.toggle("open");
+    $("legend-toggle").setAttribute("aria-expanded", String(open));
+  });
 
   $("panel-toggle").addEventListener("click", () => {
     const p = $("panel");

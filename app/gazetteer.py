@@ -67,6 +67,15 @@ REGION_ALIASES: dict[str, list[str]] = {
 EXACT_ALIASES = {"мск", "мо", "спб", "нн", "кбр", "кчр", "хмао", "янао", "нао", "еао", "коми", "ставрополье"}
 
 
+def visual_center(geom) -> tuple[float, float]:
+    """(lat, lon) для значка: центр масс, а если он вне фигуры (подкова, полумесяц) — ближайшая точка внутри."""
+    c = geom.centroid
+    if not geom.contains(c):
+        from shapely.ops import nearest_points
+        c = nearest_points(geom.buffer(-0.02) if not geom.buffer(-0.02).is_empty else geom, c)[0]
+    return c.y, c.x
+
+
 def normalize(text: str) -> str:
     return text.lower().replace("ё", "е")
 
@@ -134,10 +143,9 @@ class Gazetteer:
         self.regions: dict[str, Region] = {}
         regions_raw = json.loads((data_dir / "regions.geojson").read_text(encoding="utf-8"))
         for f in regions_raw["features"]:
-            geom = shape(f["geometry"])
-            rp = geom.representative_point()
+            geom = shape(f["geometry"]).buffer(0)
             rid = f["properties"]["id"]
-            self.regions[rid] = Region(rid, f["properties"]["name"], geom, prep(geom), (rp.y, rp.x))
+            self.regions[rid] = Region(rid, f["properties"]["name"], geom, prep(geom), visual_center(geom))
 
         self.districts: dict[str, District] = {}
         district_patterns: dict[str, list[Place]] = {}
@@ -147,8 +155,7 @@ class Gazetteer:
             for f in json.loads(districts_file.read_text(encoding="utf-8"))["features"]:
                 props = f["properties"]
                 geom = shape(f["geometry"]).buffer(0)
-                rp = geom.representative_point()
-                d = District(props["id"], props["name"], props["region"], geom, prep(geom), (rp.y, rp.x))
+                d = District(props["id"], props["name"], props["region"], geom, prep(geom), visual_center(geom))
                 self.districts[d.id] = d
                 place = Place(d.name, d.region_id, d.center[0], d.center[1], kind="district", district_id=d.id)
                 core = re.sub(r"(?i)\b(?:городской|округ|район|г\.о\.)\b", " ", props["raw"]).strip()
