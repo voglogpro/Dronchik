@@ -10,7 +10,9 @@ import re
 import sys
 from pathlib import Path
 
-from shapely.geometry import mapping, shape
+from shapely.geometry import shape
+
+from boundary_geometry import export_geometry
 
 ROOT = Path(__file__).resolve().parent.parent
 TOLERANCE = 0.004  # ~300-400 м, достаточно для раскраски районов
@@ -65,19 +67,19 @@ def main(src: str, regions: list[str]) -> None:
             if did in used:
                 continue
             used.add(did)
-            geom = shape(f["geometry"]).buffer(0).simplify(TOLERANCE, preserve_topology=True)
+            geom = export_geometry(shape(f["geometry"]), TOLERANCE)
             features.append({
                 "type": "Feature",
                 "id": did,
                 "properties": {"id": did, "name": display_name(name), "raw": name, "region": rid},
-                "geometry": mapping(geom),
+                "geometry": geom,
             })
         print(f"{rname}: {len(raw['features'])}")
     text = json.dumps({"type": "FeatureCollection", "features": features}, ensure_ascii=False, separators=(",", ":"))
-    text = re.sub(r"(-?\d+\.\d{3})\d+", r"\1", text)
     (ROOT / "geodata" / "districts.geojson").write_text(text, encoding="utf-8")
     print(f"всего {len(features)} районов, {len(text) // 1024} КБ")
 
 
 if __name__ == "__main__":
     main(sys.argv[1], sys.argv[2:] or DEFAULT_REGIONS)
+

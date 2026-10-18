@@ -85,8 +85,10 @@
     fillRegionSelect();
 
     const before = firstSymbolLayer();
-    map.addSource("regions", { type: "geojson", data: regions, promoteId: "id" });
-    map.addSource("districts", { type: "geojson", data: districts, promoteId: "id" });
+    // Coordinates are already simplified at export; a second simplification can
+    // make neighbouring boundary strokes diverge further when zooming in.
+    map.addSource("regions", { type: "geojson", data: regions, promoteId: "id", tolerance: 0 });
+    map.addSource("districts", { type: "geojson", data: districts, promoteId: "id", tolerance: 0 });
     if (!cfg.maptilerKey) {
       // своя подложка: суша чуть светлее фона, без внешних тайлов
       map.addLayer({ id: "land", type: "fill", source: "regions", paint: { "fill-color": "#151a22" } }, before);
