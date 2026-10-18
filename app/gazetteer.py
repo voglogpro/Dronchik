@@ -143,6 +143,15 @@ class Mention:
     place: Place
 
 
+# Одноимённые районы без указания области («Курский район» есть и в Ставропольском крае):
+# если ровно один из вариантов в приграничной области, берём его — туда долетает большинство БПЛА.
+PRIORITY_REGIONS = {
+    "belgorod-oblast", "kursk-oblast", "bryansk-oblast", "voronezh-oblast", "rostov-oblast",
+    "krasnodar-krai", "smolensk-oblast", "oryol-oblast", "lipetsk-oblast", "kaluga-oblast",
+    "tula-oblast", "moscow-oblast", "crimea",
+}
+
+
 class Gazetteer:
     def __init__(self, data_dir: Path = DATA_DIR):
         self.regions: dict[str, Region] = {}
@@ -249,6 +258,9 @@ class Gazetteer:
                         continue
                     matching = [c for c in candidates if c.region_id in context] \
                         if (len(candidates) > 1 or need_context) else candidates
+                    if not matching and not context and not need_context:
+                        border = [c for c in candidates if c.region_id in PRIORITY_REGIONS]
+                        matching = border if len(border) == 1 else []
                     if loose and not matching:
                         matching = candidates[:1]
                     if len(matching) != 1:

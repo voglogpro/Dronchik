@@ -26,7 +26,7 @@ class BoundaryGeometryTests(unittest.TestCase):
         self.assertAlmostEqual(exported.area, narrow.area, places=3)
 
     def test_existing_boundaries_are_valid_and_keep_ids(self):
-        for name, count in [("regions", 89), ("districts", 406)]:
+        for name, count in [("regions", 89), ("districts", 2341)]:
             data = json.loads((ROOT / "geodata" / f"{name}.geojson").read_text())
             self.assertEqual(len(data["features"]), count)
             ids = set()

@@ -3,7 +3,8 @@
 Источник: https://github.com/timurkanaz/Russia_geojson_OSM (OpenStreetMap, admin_level=6, ODbL).
 Использование:
   python scripts/build_districts.py путь/к/Russia_geojson_OSM [id-региона ...]
-Без списка регионов берутся DEFAULT_REGIONS.
+Без списка регионов берутся все регионы, для которых есть файл районов; у приграничных (BORDER_REGIONS)
+контуры точнее, у остальных грубее, чтобы файл оставался небольшим.
 """
 import json
 import re
@@ -16,9 +17,10 @@ from boundary_geometry import export_geometry
 
 ROOT = Path(__file__).resolve().parent.parent
 TOLERANCE = 0.004  # ~300-400 м, достаточно для раскраски районов
+TOLERANCE_FAR = 0.012  # ~1 км для областей вдали от границы
 
 # приграничные области и ближайшие к ним, куда чаще всего долетают БПЛА
-DEFAULT_REGIONS = [
+BORDER_REGIONS = [
     "belgorod-oblast", "kursk-oblast", "bryansk-oblast", "voronezh-oblast", "rostov-oblast",
     "krasnodar-krai", "smolensk-oblast", "oryol-oblast", "lipetsk-oblast", "kaluga-oblast",
     "tula-oblast", "moscow-oblast",
@@ -48,26 +50,39 @@ def display_name(raw: str) -> str:
     return name
 
 
+def norm(name: str) -> str:
+    """«Республика Адыгея (Адыгея)» и «Адыгея» → «адыгея»: названия в источнике и у нас различаются."""
+    name = re.sub(r"\(.*?\)|\bреспублика\b|автономный округ|- югра|- чувашия", "", name.lower())
+    name = name.replace("чувашская", "чувашия")
+    return re.sub(r"[\s-]+", " ", name).strip()
+
+
 def main(src: str, regions: list[str]) -> None:
     src_dir = Path(src) / "GeoJson's" / "Regions"
     region_names = {
         f["properties"]["id"]: f["properties"]["name"]
         for f in json.loads((ROOT / "geodata" / "regions.geojson").read_text(encoding="utf-8"))["features"]
     }
+    files = {norm(p.name.split("_")[0]): p for p in src_dir.glob("*/*.geojson")}
+    explicit = bool(regions)
     features, used = [], set()
-    for rid in regions:
+    for rid in regions or list(region_names):
         rname = region_names[rid]
-        files = [p for p in src_dir.glob("*/*.geojson") if p.name.split("_")[0].lower() == rname.lower()]
-        if not files:
-            raise SystemExit(f"нет файла районов для {rname}")
-        raw = json.loads(files[0].read_text(encoding="utf-8"))
+        path = files.get(norm(rname))
+        if not path:
+            if explicit:
+                raise SystemExit(f"нет файла районов для {rname}")
+            print(f"{rname}: нет файла районов, пропускаю")
+            continue
+        tolerance = TOLERANCE if rid in BORDER_REGIONS else TOLERANCE_FAR
+        raw = json.loads(path.read_text(encoding="utf-8"))
         for f in raw["features"]:
             name = f["properties"]["district"]
             did = f"{rid}/{slug(name)}"
             if did in used:
                 continue
             used.add(did)
-            geom = export_geometry(shape(f["geometry"]), TOLERANCE)
+            geom = export_geometry(shape(f["geometry"]), tolerance)
             features.append({
                 "type": "Feature",
                 "id": did,
@@ -81,5 +96,5 @@ def main(src: str, regions: list[str]) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2:] or DEFAULT_REGIONS)
+    main(sys.argv[1], sys.argv[2:])
 

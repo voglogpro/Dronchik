@@ -69,7 +69,8 @@ def main(out: str, maplibre_css: str, heatmap_json: str = "", key: str = "") -> 
 
     css = Path(maplibre_css).read_text(encoding="utf-8")
     (out_dir / "style.css").write_text(css + "\n" + (static / "style.css").read_text(encoding="utf-8"), encoding="utf-8")
-    (out_dir / "app.js").write_text((static / "app.js").read_text(encoding="utf-8"), encoding="utf-8")
+    for js in ("app.js", "notice.js"):
+        (out_dir / js).write_text((static / js).read_text(encoding="utf-8"), encoding="utf-8")
     (out_dir / "neighbors.geojson").write_text((ROOT / "geodata" / "neighbors.geojson").read_text(encoding="utf-8"), encoding="utf-8")
     areas = json.loads((ROOT / "geodata" / "launch_areas.json").read_text(encoding="utf-8"))["areas"]
     (out_dir / "launch-areas.json").write_text(json.dumps([{"name": a[0], "lat": a[1], "lon": a[2]} for a in areas], ensure_ascii=False), encoding="utf-8")

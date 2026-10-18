@@ -161,7 +161,7 @@ def test_same_named_district_needs_region_context(gaz):
 def test_city_gets_its_district(gaz):
     p = {pl.name: pl for pl in gaz.places}
     assert p["Короча"].district_id == "belgorod-oblast/korochanskiy-rayon"
-    assert p["Казань"].district_id is None  # для дальних регионов районов нет
+    assert p["Казань"].district_id == "republic-of-tatarstan/gorodskoy-okrug-kazan"
 
 
 def test_engine_district_alerts(gaz):
