@@ -482,8 +482,8 @@
     const full = state.mode !== "public";
     $("access-section").hidden = !(cfg.accessCodes || state.mode === "full");
     $("access-text").textContent = full
-      ? "Включена подробная карта: значки дронов, маршруты, работа ПВО и пуски. Это расчётная анимация по сообщениям каналов, а не реальное положение. Не пересылайте её."
-      : "Открыта публичная карта: только области и районы, где каналы объявили опасность — как в официальных оповещениях. Подробный слой доступен по коду.";
+      ? "Включена подробная карта: значки дронов, маршруты, работа ПВО, пуски и ночной прогноз. Это расчётная анимация по сообщениям каналов, а не реальное положение. Не пересылайте её."
+      : "Открыта публичная карта: только области и районы, где каналы объявили опасность — как в официальных оповещениях. Значки дронов, маршруты и ночной прогноз доступны по коду.";
     $("access-form").hidden = full;
     $("access-logout").hidden = !full || state.mode !== "full";
   }
@@ -599,8 +599,15 @@
     const fc_ = state.forecast;
     $("forecast").hidden = !fc_;
     if (fc_) {
-      $("forecast-meta").innerHTML = `· <a href="${tgLink(fc_.channel, fc_.msg_id)}" target="_blank" rel="noopener">@${esc(fc_.channel)}</a>, ${hhmm(fc_.t)}`;
+      const sm = fc_.summary || { title: "Прогноз обстановки", directions: [], notes: [] };
+      $("forecast-title").textContent = sm.title;
+      $("forecast-expected").hidden = !sm.expected;
+      $("forecast-expected").textContent = sm.expected ? `ожидается ${sm.expected}` : "";
+      $("forecast-directions").innerHTML = sm.directions.map((d) => `<li>${esc(d)}</li>`).join("");
+      $("forecast-notes").innerHTML = sm.notes.map((n) => `<li>${esc(n)}</li>`).join("");
       $("forecast-text").textContent = fc_.text;
+      $("forecast-meta").innerHTML = `Прогноз канала <a href="${tgLink(fc_.channel, fc_.msg_id)}" target="_blank" rel="noopener">@${esc(fc_.channel)}</a> от ${hhmm(fc_.t)}. `
+        + "Это оценка канала, а не данные наблюдения: направления на карте — тусклый пунктир.";
     }
   }
 

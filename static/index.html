@@ -109,10 +109,16 @@
         <button type="button" id="access-logout" class="btn" hidden>Вернуться к публичной карте</button>
       </section>
 
-      <details id="forecast" class="forecast" hidden>
-        <summary>Прогноз обстановки <span id="forecast-meta" class="sub"></span></summary>
-        <p id="forecast-text"></p>
-      </details>
+      <section id="forecast" class="forecast" hidden aria-labelledby="forecast-title">
+        <div class="forecast-head">
+          <h2 id="forecast-title">Прогноз на ночь</h2>
+          <span id="forecast-expected" class="forecast-expected" hidden></span>
+        </div>
+        <ul id="forecast-directions" class="forecast-directions"></ul>
+        <ul id="forecast-notes" class="forecast-notes"></ul>
+        <details class="forecast-raw"><summary>Текст канала</summary><p id="forecast-text"></p></details>
+        <p class="sub" id="forecast-meta"></p>
+      </section>
 
       <section>
         <h2>Регионы под угрозой</h2>

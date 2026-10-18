@@ -77,7 +77,8 @@ class Engine:
         if RX_FORECAST.search(normalize(text)):
             if not self.forecast or t >= self.forecast["t"]:
                 self.forecast = {"t": t, "channel": channel, "msg_id": msg_id, "text": text.strip()[:1500],
-                                 "vectors": self.forecast_parser.vectors(text)}
+                                 "vectors": self.forecast_parser.vectors(text),
+                                 "summary": self.forecast_parser.summary(text)}
                 self.version += 1
             return []
         launch = self.launch_detector.parse(text, t, channel)
@@ -266,14 +267,13 @@ class Engine:
     def public_snapshot(self, now: float, full: dict | None = None) -> dict:
         """Публичная карта: только области и районы с объявленной опасностью и значки «!» —
         как официальные оповещения. Без значков дронов, маршрутов, прогнозов подлёта, ПВО, пусков
-        и истории пролётов: это видят только владельцы кода доступа."""
+        истории пролётов и ночного прогноза: это видят только владельцы кода доступа."""
         snap = dict(full or self.snapshot(now))
         snap["regions"] = {k: v for k, v in snap["regions"].items() if v["status"] != "predicted"}
         snap["districts"] = {k: v for k, v in snap["districts"].items() if v["status"] != "predicted"}
         snap["tracks"], snap["shootdowns"], snap["launches"] = [], [], []
         snap["alert_marks"] = self._alert_marks(now, everywhere=True)
-        if snap.get("forecast"):
-            snap["forecast"] = {**snap["forecast"], "vectors": []}
+        snap["forecast"] = None  # ночной прогноз «чего ждать» — часть подробной версии
         snap["publish"] = {**snap["publish"], "tracks": False, "air_defense": False, "launches": False, "heatmap": False}
         snap["mode"] = "public"
         return snap

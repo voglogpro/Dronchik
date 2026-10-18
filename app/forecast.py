@@ -9,6 +9,10 @@ import re
 
 from .gazetteer import LETTER, Gazetteer, normalize, word_stem
 
+RX_EXPECTED = re.compile(r"ожида\w*\s+(?:ориентировочно\s+)?((?:до|около|более|свыше|порядка)?\s*\d[\d\s]*\d?)\s*(?:единиц\w*\s+)?(?:вражеск\w*\s+)?(бпла|беспилот\w*|дрон\w*)", re.I)
+RX_TITLE = re.compile(r"прогноз\w*\s+обстановк\w*[^\n]*", re.I)
+# подписи и реклама канала в конце поста
+RX_JUNK = re.compile(r"^(?:тг|мах|max|tg|подписат|наш канал|дальше будет больше|основные векторы)", re.I)
 ARROW = re.compile(r"\s*(?:→|->|⇒|➡️?|—>)\s*")
 
 
@@ -55,3 +59,23 @@ class ForecastParser:
                     b = self.gaz.regions[t].center
                     out.append({"from": o, "to": t, "path": [[round(a[0], 3), round(a[1], 3)], [round(b[0], 3), round(b[1], 3)]]})
         return out
+
+    def summary(self, text: str) -> dict:
+        """Карточка прогноза: заголовок, сколько БПЛА ожидается, направления и важные заметки."""
+        lines = [re.sub(r"^[\W_]+", "", ln).strip() for ln in text.splitlines()]
+        lines = [ln for ln in lines if ln]
+        title = next((m.group(0).strip(" :") for ln in lines for m in [RX_TITLE.search(ln)] if m), "Прогноз обстановки")
+        m = RX_EXPECTED.search(text)
+        expected = f"{re.sub(r'\\s+', ' ', m.group(1)).strip()} БПЛА" if m else None
+        directions, notes = [], []
+        for ln in lines:
+            if RX_TITLE.search(ln) or RX_JUNK.search(ln) or (m and m.group(0) in ln):
+                continue
+            if ARROW.search(ln):
+                directions.append(ARROW.sub(" → ", ln).rstrip(" ."))
+            else:
+                notes.append(ln)
+        title = re.sub(r"(?i)^прогноз\w*\s+обстановк\w*", "Прогноз обстановки", title)
+        directions = [re.sub(r"\s+", " ", d) for d in directions]
+        return {"title": title, "expected": expected,
+                "directions": directions[:12], "notes": notes[:8]}

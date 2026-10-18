@@ -17,7 +17,11 @@ def gaz():
     return Gazetteer()
 
 
-@pytest.mark.parametrize("name,level", [("red", "red"), ("yellow", "yellow"), ("drill", None)])
+@pytest.mark.parametrize("name,level", [
+    ("red", "red"), ("yellow", "yellow"), ("yellow2", "yellow"), ("yellow_air", "yellow_air"),
+    ("missile", "missile"),  # тоже красный, но про ракеты — по цвету не отличить
+    ("green", "green"), ("drill", None),
+])
 def test_banner_colors(name, level):
     # «УЧЕНИЯ!!!» тоже жёлтая картинка — её пропускаем
     assert classify((DATA / f"banner_{name}.jpg").read_bytes()) == level
@@ -74,3 +78,28 @@ def test_access_codes_and_bruteforce():
     assert a.allow_attempt("1.2.3.4", 100 + 601)
     # код убрали из списка — старая cookie больше не действует
     assert not Access([], "s").is_full(token)
+
+
+def test_green_banner_clears_and_missile_banner_alerts(gaz):
+    e = Engine(gaz)
+    e.process("kupolrussia", annotate("Нижегородская область", "red"), T0)
+    e.process("kupolrussia", annotate("Белгородская область", "missile"), T0 + 30)
+    snap = e.snapshot(T0 + 60)
+    assert snap["regions"]["nizhny-novgorod-oblast"]["status"] == "uav"
+    assert snap["regions"]["belgorod-oblast"]["status"] == "missile"
+    e.process("kupolrussia", annotate("Нижегородская область", "green"), T0 + 120)
+    assert "nizhny-novgorod-oblast" not in e.snapshot(T0 + 150)["regions"]
+
+
+def test_forecast_only_in_full_version(gaz):
+    e = Engine(gaz)
+    e.process("lpr1_treugolnik", "⚠️ ПРОГНОЗ ОБСТАНОВКИ на ночь с 17 на 18 октября\n"
+              "В предстоящую ночь ожидается ориентировочно до 1000 единиц вражеских БПЛА.\n"
+              "▶️Брянская область → Калужская/Смоленская область.\nПротивник готовит удары по энергетике.\n"
+              "Дальше будет больше.\nТГ: День в кадре", T0)
+    full = e.snapshot(T0 + 60)
+    sm = full["forecast"]["summary"]
+    assert sm["title"] == "Прогноз обстановки на ночь с 17 на 18 октября" and sm["expected"] == "до 1000 БПЛА"
+    assert sm["directions"] == ["Брянская область → Калужская/Смоленская область"]
+    assert sm["notes"] == ["Противник готовит удары по энергетике."]
+    assert e.public_snapshot(T0 + 60)["forecast"] is None

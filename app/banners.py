@@ -1,9 +1,9 @@
 """Распознавание картинок-баннеров уровня опасности («Купол России» и каналы, которые его пересылают).
 
 Такие посты состоят из баннера и списка мест («Тульская область»), без слов «тревога» в тексте.
-Цвет баннера и есть статус: красный — опасность (тревога) по БПЛА, жёлтый — внимание.
-Сравниваем уменьшенную картинку с эталонами целиком, а не только по цвету: у канала есть и другие
-жёлтые картинки («УЧЕНИЯ!!!»), их нужно пропускать. Незнакомая картинка — None.
+Цвет баннера и есть статус: красный — опасность (тревога) по БПЛА, жёлтый — внимание, зелёный — отбой.
+Сравниваем уменьшенную картинку с эталонами целиком, а не только по цвету: красный бывает и про ракеты
+(«Ракетная опасность»), жёлтый — про авиацию или «УЧЕНИЯ!!!». Незнакомая картинка — None.
 """
 from __future__ import annotations
 
@@ -19,15 +19,19 @@ MAX_BYTES = 2_000_000
 PHRASES = {
     "red": "Красный уровень опасности по БПЛА",
     "yellow": "Жёлтый уровень опасности по БПЛА",
+    "yellow_air": "Жёлтый уровень воздушной опасности",
+    "missile": "Ракетная опасность",
+    "green": "Отбой опасности по БПЛА",
 }
 
 _refs = json.loads((ROOT / "geodata" / "banners.json").read_text(encoding="utf-8"))
 SIZE = tuple(_refs["size"])
-REFS = {name: [tuple(px) for px in b["thumb"]] for name, b in _refs["banners"].items()}
+# несколько эталонов могут означать один уровень (два варианта жёлтого баннера)
+REFS = [(b["level"], [tuple(px) for px in b["thumb"]]) for b in _refs["banners"].values()]
 
 
 def classify(data: bytes) -> str | None:
-    """'red' | 'yellow' | None по байтам картинки."""
+    """Уровень из PHRASES ('red', 'yellow', 'yellow_air', 'missile', 'green') или None."""
     try:
         from PIL import Image
         img = Image.open(io.BytesIO(data[:MAX_BYTES])).convert("RGB")
@@ -39,7 +43,7 @@ def classify(data: bytes) -> str | None:
     small = img.resize(SIZE, Image.BILINEAR)
     thumb = list(small.get_flattened_data() if hasattr(small, "get_flattened_data") else small.getdata())
     best, best_diff = None, MAX_DIFF
-    for name, ref in REFS.items():
+    for name, ref in REFS:
         diff = sum(abs(a - b) for p, q in zip(thumb, ref) for a, b in zip(p, q)) / (len(ref) * 3)
         if diff < best_diff:
             best, best_diff = name, diff
