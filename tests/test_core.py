@@ -306,3 +306,74 @@ def test_neighbor_and_backward_fixations_near_border_are_other_drones(gaz):
         assert tr.add_sighting(back, T0 + 15 * 60, "ch2") is not a        # к границе — другой дрон
         assert tr.add_sighting(side, T0 + 16 * 60, "ch3") is not a        # сбоку — тоже
     assert tr.add_sighting(ahead, T0 + 20 * 60, "ch4") is a              # вглубь — продолжение
+
+
+def test_fixation_in_zone_already_flown_through_is_another_drone(gaz):
+    """Дрон прошёл Динскую → Краснодар. Фиксация между ними (пройденный участок) — другой дрон, как и фиксация в Динской."""
+    from app.gazetteer import Place
+    tr = Tracker(gaz)
+    p = {pl.name: pl for pl in gaz.places}
+    dinskaya = next((pl for pl in gaz.places if pl.name == "Динская"), None) or Place("Динская", "krasnodar-krai", 45.22, 39.22)
+    a = tr.add_sighting(dinskaya, T0, "ch1")
+    assert tr.add_sighting(p["Краснодар"], T0 + 15 * 60, "ch1") is a       # 35 км за 15 минут — это ~140 км/ч, тот же дрон
+    mid = Place("Середина пути", "krasnodar-krai", (dinskaya.lat + p["Краснодар"].lat) / 2, (dinskaya.lon + p["Краснодар"].lon) / 2)
+    assert tr.add_sighting(mid, T0 + 20 * 60, "ch2") is not a              # между точками, которые дрон уже пролетел
+    assert tr.add_sighting(dinskaya, T0 + 21 * 60, "ch3") is not a         # в Динской, откуда он давно улетел
+
+
+def test_too_slow_to_be_the_same_drone(gaz):
+    """Через 5+ минут после того, как дрон улетел, фиксация почти там же — другой дрон: так медленно ударные БПЛА не летят."""
+    tr = Tracker(gaz)
+    p = {pl.name: pl for pl in gaz.places}
+    a = tr.add_sighting(p["Рыльск"], T0, "ch1")
+    assert tr.add_sighting(p["Льгов"], T0 + 20 * 60, "ch1") is a              # ~35 км за 20 минут
+    # следующая фиксация через 25 минут — в 20 км от Льгова: за это время дрон должен был уйти минимум на ~35 км дальше
+    from app.gazetteer import Place
+    from app.geo import destination
+    near = Place("Рядом", p["Льгов"].region_id, *destination(p["Льгов"].lat, p["Льгов"].lon, 90, 18))
+    assert tr.add_sighting(near, T0 + 45 * 60, "ch2") is not a
+
+
+def test_same_spot_repeat_is_same_drone_only_within_a_few_minutes(gaz):
+    tr = Tracker(gaz)
+    p = {pl.name: pl for pl in gaz.places}
+    a = tr.add_sighting(p["Курск"], T0, "ch1")
+    assert tr.add_sighting(p["Курск"], T0 + 7 * 60, "ch2") is a            # запоздавшее сообщение другого канала
+    b = tr.add_sighting(p["Курск"], T0 + 20 * 60, "ch1")
+    assert b is not a                                                       # через 20 минут дрон давно улетел: это следующий
+
+
+def test_missile_alert_gets_flight_estimate_and_goes_stale(gaz):
+    from app.engine import Engine
+    e = Engine(gaz)
+    e.process("vrv_radar", "Белгородская область\nРакетная опасность", T0, 1)
+    snap = e.snapshot(T0 + 60)
+    (m,) = snap["missiles"]
+    lo, hi = m["eta_min"]
+    assert m["id"] == "belgorod-oblast" and m["kind"] == "cruise" and 0 < lo < hi < 60 and m["state"] == "flying"
+    # линия идёт от границы Украины к центру области
+    assert m["origin"] != m["target"] and snap["regions"]["belgorod-oblast"]["status"] == "missile"
+    # через расчётное время подлёта: «возможен прилёт», а ещё через 10 минут метка снимается (область — по сообщениям канала)
+    arrived = e.snapshot(T0 + (hi + 1) * 60)["missiles"]
+    assert arrived and arrived[0]["state"] == "arrived"
+    stale = e.snapshot(T0 + (hi + 11) * 60)
+    assert stale["missiles"] == [] and stale["regions"]["belgorod-oblast"]["status"] == "missile"
+    # отбой ракетной опасности убирает расчёт сразу
+    e.process("vrv_radar", "Белгородская область\nОтбой ракетной опасности", T0 + 5 * 60, 2)
+    assert e.snapshot(T0 + 6 * 60)["missiles"] == []
+
+
+def test_ballistic_is_faster_and_far_regions_are_not_drawn(gaz):
+    from app.engine import Engine
+    e = Engine(gaz)
+    e.process("a", "Курская область\nРакетная опасность", T0, 1)
+    e.process("a", "Брянская область\nБаллистическая ракетная опасность", T0, 2)
+    e.process("a", "Хабаровский край\nРакетная опасность", T0, 3)
+    by = {m["id"]: m for m in e.snapshot(T0 + 30)["missiles"]}
+    assert by["bryansk-oblast"]["kind"] == "ballistic" and by["kursk-oblast"]["kind"] == "cruise"
+    assert by["bryansk-oblast"]["speed"] > 2 * by["kursk-oblast"]["speed"]
+    assert "khabarovsk-krai" not in by          # дальше 1200 км от границы ракеты с Украины не считаем
+    assert e.public_snapshot(T0 + 30)["missiles"] == []
+    # повторное сообщение в той же волне отсчёт не сбрасывает
+    e.process("a", "Курская область\nРакетная опасность", T0 + 5 * 60, 4)
+    assert {m["id"]: m for m in e.snapshot(T0 + 6 * 60)["missiles"]}["kursk-oblast"]["t0"] == T0

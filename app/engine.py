@@ -1,6 +1,7 @@
 """Сводит всё вместе: сообщение → события → статусы регионов и треки → снимок для карты."""
 from __future__ import annotations
 
+import re
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -21,6 +22,14 @@ SHOOTDOWN_SHOW_S = 12 * 60       # сколько показывать отме�
 FORECAST_SHOW_S = 14 * 3600      # «прогноз на ночь» актуален до утра
 ENGAGED_SHOW_S = 10 * 60         # «под прицелом ПВО» — пока свежие сообщения о работе ПВО
 OLD_TRACK_SHOW_S = 12 * 60       # потерянные и сбитые цели остаются на карте столько после последней фиксации/сбития
+# Ракеты: фиксаций у них нет, есть только «ракетная опасность» в области. Примерное время подлёта — расстояние от границы
+# Украины (плюс удаление пусковой от границы) на скорость: крылатые ~850 км/ч, баллистические ~2500 км/ч (мин / средняя / макс).
+MISSILE_SPEEDS = {"cruise": (650.0, 850.0, 1000.0), "ballistic": (1800.0, 2500.0, 3300.0)}
+MISSILE_STANDOFF_KM = 80.0       # пусковая обычно дальше границы
+MISSILE_MAX_KM = 1200.0          # дальше — ракеты с Украины не считаем
+MISSILE_STALE_MIN = 10.0         # через столько минут после расчётного прилёта метка снимается как неактуальная
+MISSILE_NEW_WAVE_S = 20 * 60     # перерыв между сообщениями больше этого — новая волна, отсчёт заново
+RX_BALLISTIC = re.compile(r"баллист|искандер|атакмс|atacms|иск[- ]?м")
 FLOW_SHOW_S = 40 * 60            # коридор массового пролёта виден столько после последнего подтверждения
 LONE_TRACK_SHOW_S = 15 * 60      # одна фиксация без второй точки: курса нет, держим недолго
 
@@ -77,6 +86,7 @@ class Engine:
         self.alerts: dict[str, RegionAlert] = {}
         self.district_alerts: dict[str, RegionAlert] = {}
         self.feed: deque[dict] = deque(maxlen=150)
+        self.missile_info: dict[str, dict] = {}   # область/район -> {t0, last, kind}: когда объявлена ракетная опасность
         self.flows: list[dict] = []         # коридоры массового пролёта: «через X, Y в направлении Z»
         self.shootdowns: deque[dict] = deque(maxlen=200)
         self.forecast: dict | None = None   # последний «прогноз обстановки» канала: текст и векторы направлений
@@ -116,6 +126,10 @@ class Engine:
                         self.tracker.clear_regions(ev.region_ids, t)
             elif ev.kind in (UAV_ALERT, MISSILE_ALERT):
                 status = "missile" if ev.kind == MISSILE_ALERT else "uav"
+                if status == "missile":
+                    covered = set(ev.region_ids)
+                    for key in ev.region_ids + [d for d in ev.district_ids if self.gaz.districts[d].region_id not in covered]:
+                        self._note_missile(key, t, ev.text)
                 for rid in ev.region_ids:
                     if status == "uav" and "uav" not in getattr(self.alerts.get(rid), "levels", {}):
                         self.tracker.steer_to_alert(rid, t)
@@ -283,6 +297,7 @@ class Engine:
                 "tracks": tracks, "shootdowns": shootdowns, "alert_marks": self._alert_marks(now),
                 "launches": launches if pub.launches else [],
                 "flows": self._flows_snapshot(now) if pub.tracks else [],
+                "missiles": self._missiles_snapshot(now) if pub.tracks else [],
                 "forecast": forecast,
                 "health": self.health,
                 "feed": list(self.feed) if pub.feed else [], "publish": dict(pub.__dict__), "mode": "full"}
@@ -294,7 +309,7 @@ class Engine:
         snap = dict(full or self.snapshot(now))
         snap["regions"] = {k: v for k, v in snap["regions"].items() if v["status"] != "predicted"}
         snap["districts"] = {k: v for k, v in snap["districts"].items() if v["status"] != "predicted"}
-        snap["tracks"], snap["shootdowns"], snap["launches"], snap["flows"] = [], [], [], []
+        snap["tracks"], snap["shootdowns"], snap["launches"], snap["flows"], snap["missiles"] = [], [], [], [], []
         snap["alert_marks"] = self._alert_marks(now, everywhere=True)
         snap["forecast"] = None  # ночной прогноз «чего ждать» — часть подробной версии
         # лента тревог: только объявления опасности, «внимание» и отбои; сообщения о фиксациях,
@@ -330,6 +345,47 @@ class Engine:
             marks.append({"lat": r.center[0], "lon": r.center[1], "level": a.status, "name": r.name,
                           "region": rid, "district": None, "channels": sorted(a.channels), "updated": a.updated})
         return marks
+
+    def _note_missile(self, key: str, t: float, text: str) -> None:
+        info = self.missile_info.get(key)
+        kind = "ballistic" if RX_BALLISTIC.search(normalize(text)) else "cruise"
+        if info is None or t - info["last"] > MISSILE_NEW_WAVE_S:
+            info = self.missile_info[key] = {"t0": t, "kind": kind}
+        info["last"] = t
+        if kind == "ballistic":
+            info["kind"] = kind
+
+    def _missiles_snapshot(self, now: float) -> list[dict]:
+        """Ракетная опасность как «возможный прилёт»: линия от границы, скорость и окно времени подлёта.
+
+        Ракет мы не видим — только оповещение. Считаем, когда ракета могла бы долететь, если запущена в момент оповещения;
+        если время вышло, а отбоя не было, метка снимается как неактуальная (область остаётся по сообщениям канала)."""
+        out = []
+        for key, info in list(self.missile_info.items()):
+            alert = self.alerts.get(key) or self.district_alerts.get(key)
+            if not alert or "missile" not in alert.levels:
+                del self.missile_info[key]
+                continue
+            area = self.gaz.regions.get(key) or self.gaz.districts[key]
+            near = self.origins.nearest(*area.center) if self.origins.geom is not None else None
+            if near is None or near[2] + MISSILE_STANDOFF_KM > MISSILE_MAX_KM:
+                continue
+            dist = near[2] + MISSILE_STANDOFF_KM
+            lo, mid, hi = MISSILE_SPEEDS[info["kind"]]
+            eta_lo, eta_hi = dist / hi * 60, dist / lo * 60
+            elapsed = (now - info["t0"]) / 60
+            if elapsed > eta_hi + MISSILE_STALE_MIN:
+                continue
+            arrived = elapsed >= dist / mid * 60
+            out.append({
+                "id": key, "name": area.name, "kind": info["kind"], "speed": mid, "t0": info["t0"],
+                "origin": [round(near[0], 3), round(near[1], 3)], "target": [round(area.center[0], 3), round(area.center[1], 3)],
+                "dist_km": round(dist), "eta_min": [max(round(eta_lo), 1), max(round(eta_hi), 1)],
+                "left_min": [max(round(eta_lo - elapsed), 0), max(round(eta_hi - elapsed), 0)],
+                "progress_km": round(min(mid * max(now - info["t0"], 0) / 3600, dist)),
+                "state": "arrived" if arrived else "flying", "channels": sorted(alert.channels),
+            })
+        return sorted(out, key=lambda m: m["dist_km"])[:30]
 
     def _add_flow(self, ev, channel: str, msg_id: int | None, t: float) -> None:
         key = (tuple(sorted(ev.via)), tuple(sorted(ev.to)))

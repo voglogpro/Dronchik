@@ -562,3 +562,16 @@ details.sec:not([open]) > summary h2 { margin-bottom: 6px; }
 .feed-badge.flow, .pop-badge.flow { background: #ffb347; color: #1a1004; }
 .ln-flow { height: 0; border-top: 4px solid rgba(255, 179, 71, .55); }
 .ln-weak { border-top-style: dashed; border-top-color: rgba(245, 194, 76, .5); }
+
+
+/* ============ Ракеты: расчётный полёт ============ */
+.missile-mark { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0; border: 0; background: none; cursor: pointer; }
+.missile-mark svg { width: 24px; height: 24px; filter: drop-shadow(0 0 6px rgba(229, 72, 77, .8)); }
+.missile-mark path { fill: #fff; stroke: var(--missile); stroke-width: 1.6; stroke-linejoin: round; }
+.missile-mark span { padding: 1px 7px; border-radius: 99px; font: 700 11px/1.35 var(--font); color: #fff; background: rgba(229, 72, 77, .92);
+  white-space: nowrap; box-shadow: 0 3px 10px rgba(0, 0, 0, .45); }
+.missile-mark.arrived svg { opacity: .55; animation: pulse 1.6s ease-in-out infinite; }
+.missile-mark:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.ln-missile { height: 0; border-top: 2px dashed var(--missile); }
+.badge.missile { background: var(--missile); color: #fff; }
+@media (prefers-reduced-motion: reduce) { .missile-mark.arrived svg { animation: none; } }

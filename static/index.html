@@ -172,6 +172,13 @@
         <ul id="track-list" class="list"></ul>
       </details>
 
+      <details id="missile-section" class="fold sec" data-fold="missiles" data-layer="tracks" hidden>
+        <summary><h2>Ракетная опасность: возможный подлёт</h2><span class="chev" aria-hidden="true"></span></summary>
+        <ul id="missile-list" class="list"></ul>
+        <p class="sub note">Расчёт по оповещению: от границы Украины, крылатые ~850 км/ч, баллистические ~2500 км/ч. Не фиксация ракеты;
+          если расчётное время вышло, метка снимается.</p>
+      </details>
+
       <details id="heat-section" class="fold sec" data-fold="heat" data-layer="heatmap">
         <summary><h2>История пролётов</h2><span class="chev" aria-hidden="true"></span></summary>
         <div class="seg" role="group" aria-label="Период тепловой карты">
@@ -224,6 +231,7 @@
     <span data-layer="launches"><i class="lg-origin"></i>Откуда обычно пуски</span>
     <span data-layer="tracks"><i class="lg-forecast"></i>Прогноз канала на ночь: ожидаемые направления</span>
     <span data-layer="launches"><i class="ln ln-launch"></i>Пуск и примерный маршрут</span>
+    <span data-layer="tracks"><i class="ln ln-missile"></i>Возможный полёт ракеты (расчёт по оповещению)</span>
     <span data-layer="tracks"><i class="ln ln-flow"></i>Массовый пролёт: коридор из сообщения канала</span>
     <span data-layer="tracks"><i class="lg-drone lg-weak"></i>Бледная стрелка — курс вероятный (вглубь страны)</span>
     <span data-layer="tracks"><i class="ln ln-origin"></i>Примерно откуда вылетел</span>

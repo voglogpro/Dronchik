@@ -162,6 +162,13 @@
       id: "flows", type: "line", source: "flows", layout: { "line-cap": "round", "line-join": "round" },
       paint: { "line-color": COLORS.flow, "line-opacity": 0.8, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1.6, 7, 3], "line-dasharray": [2.2, 1.4] },
     }, "forecast-vectors");
+    // возможный полёт ракеты при ракетной опасности: расчёт от границы, а не фиксация
+    map.addSource("missiles", { type: "geojson", data: empty() });
+    map.addLayer({
+      id: "missiles", type: "line", source: "missiles", layout: { "line-cap": "round" },
+      paint: { "line-color": COLORS.missile, "line-width": 1.8, "line-dasharray": [3, 2.2],
+        "line-opacity": ["case", ["==", ["get", "state"], "arrived"], 0.35, 0.8] },
+    }, "forecast-vectors");
     // тепловая карта пролётов за период — под всеми слоями целей
     map.addSource("heat", { type: "geojson", data: empty() });
     map.addLayer({
@@ -411,6 +418,17 @@
       const [a, b] = [path[k], path[k + 1] || path[k]];
       return [(a[1] + b[1]) / 2, (a[0] + b[0]) / 2];
     });
+    const missiles = state.missiles || [];
+    map.getSource("missiles").setData(fc(missiles.map((m) => line([[m.origin[1], m.origin[0]], [m.target[1], m.target[0]]], { state: m.state }))));
+    syncMarkers(missileMarkers, missiles, (m) => m.id, missileEl, (el, m) => {
+      const deg = bearingOf(m.origin, m.target);
+      el.querySelector("svg").style.transform = `rotate(${deg}deg)`;
+      el.classList.toggle("arrived", m.state === "arrived");
+      el.querySelector("span").textContent = missileEta(m);
+      missileMotion.set(m.id, { o: [m.origin[1], m.origin[0]], t: [m.target[1], m.target[0]], dist: m.dist_km, v: m.speed, km0: m.progress_km, at: performance.now() });
+      return missilePopup(m, state.now);
+    }, (m) => { const mo = missileMotion.get(m.id); return mo ? missilePos(mo, performance.now()) : [m.origin[1], m.origin[0]]; });
+    for (const id of [...missileMotion.keys()]) if (!missileMarkers.has(id)) missileMotion.delete(id);
     syncMarkers(alertMarkers, [...marks, ...aggs], (a) => (a.agg ? `agg/${a.region}` : a.district || a.region), alertMarkEl, (el, a) => {
       // className не перезаписываем: MapLibre держит на элементе свой класс позиционирования
       el.classList.toggle("missile", a.level === "missile");
@@ -459,6 +477,32 @@
   const launchMarkers = new Map();
   const etaMarkers = new Map();
   const forecastMarkers = new Map();
+  const missileMarkers = new Map();
+  const missileMotion = new Map();   // id -> {o, t, dist, v, km0, at}: ракета «летит» по расчётной скорости между обновлениями
+  const bearingOf = ([la1, lo1], [la2, lo2]) =>
+    Math.atan2((lo2 - lo1) * Math.cos(((la1 + la2) / 2) * Math.PI / 180), la2 - la1) * 180 / Math.PI;
+  const missileEl = () => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "missile-mark";
+    el.setAttribute("aria-label", "Возможный полёт ракеты (расчёт)");
+    el.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1.5c2.2 2.4 3.3 5.4 3.3 9v5.4l2.4 2.9v2.2l-3.2-1.1-2.5 2.1-2.5-2.1-3.2 1.1v-2.2l2.4-2.9v-5.4c0-3.6 1.1-6.6 3.3-9z"/></svg><span></span>`;
+    return el;
+  };
+  function missilePos(mo, nowMs) {
+    const km = Math.min(mo.km0 + mo.v * ((nowMs - mo.at) / 3.6e6) * timeScale, mo.dist);
+    const f = mo.dist ? km / mo.dist : 1;
+    return [mo.o[0] + (mo.t[0] - mo.o[0]) * f, mo.o[1] + (mo.t[1] - mo.o[1]) * f];
+  }
+  const missileEta = (m) => (m.state === "arrived" ? "прилёт возможен" : m.left_min[1] <= 1 ? "< 1 мин" : m.left_min[0] <= 0 ? `до ${m.left_min[1]} мин` : `≈ ${m.left_min[0]}–${m.left_min[1]} мин`);
+  function missilePopup(m, now) {
+    const kind = m.kind === "ballistic" ? "баллистическая" : "крылатая";
+    return `<div class="pop-title">Ракетная опасность<span class="pop-badge missile">${esc(m.name)}</span></div>`
+      + `<div class="pop-row">Расчёт: ${kind} ракета, ~${Math.round(m.speed)} км/ч, ~${m.dist_km} км от границы</div>`
+      + `<div class="pop-row">${m.state === "arrived" ? "Расчётное время подлёта уже прошло" : `Подлёт, если ракета запущена при оповещении (${hhmm(m.t0)}): через ${etaRange(m.left_min)}`}</div>`
+      + `<div class="pop-sub">Это математическая оценка по оповещению, а не фиксация ракеты. Если подлёт не подтвердится, через 10 минут после расчётного времени метка снимется.</div>`
+      + srcLine(m.channels);
+  }
   const flowArrowMarkers = new Map();
   const flowChipMarkers = new Map();
   const flowArrowEl = () => {
@@ -551,6 +595,10 @@
     requestAnimationFrame(animateDrones);
     if (document.hidden || nowMs - lastFrame < 80) return;
     lastFrame = nowMs;
+    for (const [id, mo] of missileMotion) {
+      const mk = missileMarkers.get(id);
+      if (mk) mk.setLngLat(missilePos(mo, nowMs));
+    }
     for (const [id, m] of droneMotion) {
       const marker = droneMarkers.get(id);
       if (marker) {
@@ -725,6 +773,12 @@
         <div class="sub">${next}</div></li>`;
     }).join("") : `<li class="empty">Целей не зафиксировано</li>`;
 
+    const miss = state.missiles || [];
+    $("missile-section").hidden = !miss.length || pub.tracks === false;
+    $("missile-list").innerHTML = miss.map((m) => `<li data-region="${esc(m.id)}">
+      <div class="row"><span>${esc(m.name)}</span><span class="badge missile">${m.kind === "ballistic" ? "баллист." : "крылатые"}</span></div>
+      <div class="sub">${m.state === "arrived" ? "расчётное время подлёта прошло" : `подлёт ${etaRange(m.left_min)}`} · ~${m.dist_km} км от границы</div></li>`).join("");
+
     const launchList = (state.launches || []);
     $("launch-section").hidden = !launchList.length;
     $("launch-list").innerHTML = launchList.map((l) => {
@@ -770,6 +824,10 @@
     }
   }
 
+  $("missile-list").addEventListener("click", (e) => {
+    const li = e.target.closest("[data-region]");
+    if (li && regionGeoms[li.dataset.region]) flyToRegion(li.dataset.region);
+  });
   $("feed").addEventListener("click", (e) => {
     if (e.target.closest("a")) return;
     const li = e.target.closest("[data-region]");

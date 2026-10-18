@@ -45,11 +45,12 @@ def turn_penalty(turn: float, n_points: int = 3) -> float:
     return base if n_points >= 3 else base * SHORT_TRACK_FACTOR
 
 
-# Поток дронов вдоль одного коридора: цель с известным курсом и скоростью за время между сообщениями ушла бы вперёд;
-# фиксация у места, где она уже была, — следующий дрон. Это отделяет «Суджа → Льгов → Орёл» из нескольких целей.
-LAG_AFTER_MIN = 8.0         # правило действует, если с последней фиксации прошло больше стольких минут
-LAG_FRACTION = 0.35         # новая точка ближе этой доли ожидаемого пути от последней — «позади»
-LAG_MIN_TRAVEL_KM = 25.0    # ... и ожидаемый путь не меньше (иначе цель могла просто стоять)
+# Кинематика: дрон не стоит на месте и не возвращается. Если с последней фиксации прошло время, он обязан был улететь дальше,
+# поэтому новая фиксация там же или на уже пройденном участке пути — следующий дрон («поток дронов один за другим»).
+LATENCY_MIN = 3.0           # сообщения каналов запаздывают на пару минут — столько времени «в запасе»
+SAME_SPOT_MAX_MIN = 8.0     # «то же место» засчитываем тому же дрону только в пределах этого времени
+SLOW_FACTOR = 0.55          # дрон летит не медленнее этой доли скорости цели (но не медленнее MIN_SPEED_KMH)
+SLOW_SLACK_KM = 5.0         # допуск на неточность места: названы район и город, а не координаты
 # Модель «от границы вглубь». Измерено по сообщениям «откуда → куда»: до 60 км от границы 93% дронов летят вглубь в пределах 90°
 # (97% в пределах 120°), дальше направление размыто — дроны идут к разным городам. Поэтому жёсткие правила («не к границе»,
 # «следующая точка вглубь») действуют только у границы, а вероятный курс вглубь показывается недалеко от неё.
@@ -342,27 +343,43 @@ class Tracker:
                 best, best_cost = tr, cost
         return best
 
-    def _behind(self, tr: Track, place: Place, t: float) -> bool:
-        """Новая фиксация не может быть продолжением пути этой цели: она позади, сбоку или у границы.
+    @staticmethod
+    def _on_passed_path(tr: Track, place: Place) -> bool:
+        """Новая фиксация на участке пути, который цель уже прошла (не только в самих точках, но и между ними)."""
+        pts = tr.points
+        last = tr.last
+        for a, b in zip(pts, pts[1:]):
+            d = haversine_km(a.lat, a.lon, b.lat, b.lon)
+            steps = max(int(d // REVISIT_KM), 1)
+            for k in range(steps + 1):
+                f = k / steps
+                lat, lon = a.lat + (b.lat - a.lat) * f, a.lon + (b.lon - a.lon) * f
+                if haversine_km(lat, lon, place.lat, place.lon) <= REVISIT_KM \
+                        and haversine_km(lat, lon, last.lat, last.lon) >= LEFT_BEHIND_KM:
+                    return True
+        return False
 
-        Поток дронов идёт один за другим, и соседние дроны фиксируются слева и справа; дрон вглубь страны не
-        возвращается и вбок не уходит. Поэтому такая фиксация — другой дрон, а не «поворот» первого.
+    def _behind(self, tr: Track, place: Place, t: float) -> bool:
+        """Новая фиксация не может быть продолжением пути этой цели.
+
+        1. Время: прошло больше SAME_SPOT_MAX_MIN минут, а фиксация там же — цель давно улетела дальше.
+        2. Скорость: за время между сообщениями цель обязана пролететь не меньше, чем при 55% своей скорости;
+           если новая фиксация ближе — это другой дрон. Так отделяется поток дронов вдоль одного коридора.
+        3. Пройденный путь: фиксация на уже пролетанном участке (в том числе между точками).
+        4. У границы — не к границе и не вбок (см. NEAR_BORDER_KM); это не поворот первого дрона, а другой дрон.
         """
         last = tr.last
         bearing, speed, basis = tr.motion()
         d_last = haversine_km(last.lat, last.lon, place.lat, place.lon)
-        if len(tr.points) >= 2:
-            for p in tr.points[:-1]:
-                if haversine_km(p.lat, p.lon, place.lat, place.lon) <= REVISIT_KM \
-                        and haversine_km(p.lat, p.lon, last.lat, last.lon) >= LEFT_BEHIND_KM:
-                    return True
-            if basis == "observed" and bearing is not None:
-                dt_min = (t - last.t) / 60
-                expected = speed * dt_min / 60
-                if dt_min > LAG_AFTER_MIN and expected > LAG_MIN_TRAVEL_KM and d_last < LAG_FRACTION * expected:
-                    return True
+        dt_min = (t - last.t) / 60
         if d_last <= SAME_SPOT_KM:
-            return False
+            return dt_min > SAME_SPOT_MAX_MIN
+        if len(tr.points) >= 2 and self._on_passed_path(tr, place):
+            return True
+        v = speed if basis in ("observed", "target") else DEFAULT_SPEED_KMH
+        v_min = max(MIN_SPEED_KMH, SLOW_FACTOR * v)
+        if d_last < v_min * max(dt_min - LATENCY_MIN, 0) / 60 - SLOW_SLACK_KM:
+            return True
         v = bearing_deg(last.lat, last.lon, place.lat, place.lon)
         # заявленная цель или направление разрешают движение в свою сторону
         ref = None
