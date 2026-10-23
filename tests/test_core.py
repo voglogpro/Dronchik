@@ -435,3 +435,27 @@ def test_clear_behind_does_not_stop_drone_that_flew_on(gaz):
     assert e.tracker.region_now(tr, t) == "kaluga-oblast"
     e.process("a", "✅ Отбой угрозы БПЛА по Брянской области", t)
     assert [x for x in e.snapshot(t + 60)["tracks"] if x["status"] == "active"]
+
+
+def test_air_defense_and_shootdown_end_route(gaz):
+    """Работа ПВО: без новых фиксаций цель снимается через ENGAGED_HOLD_S. Сбитие: значок сбития, дрон с карты убирается."""
+    def flying(snap):
+        return [t for t in snap["tracks"] if t["status"] == "active"]
+
+    def start():
+        e = Engine(gaz)
+        e.process("a", "⚠️ Угроза атаки БПЛА в Брянской области", T0)
+        e.process("a", "⚠️ Угроза атаки БПЛА в Калужской области", T0)
+        e.process("a", "🛵 БПЛА в районе Трубчевска", T0 + 60)
+        e.process("a", "🛵 БПЛА над Брянском", T0 + 31 * 60)
+        return e
+
+    e = start()
+    e.process("a", "Работа ПВО над Брянском", T0 + 33 * 60)
+    assert flying(e.snapshot(T0 + 40 * 60))[0]["engaged"]
+    assert not flying(e.snapshot(T0 + 50 * 60))
+
+    e = start()
+    e.process("a", "Над Брянском сбит БПЛА", T0 + 33 * 60)
+    snap = e.snapshot(T0 + 34 * 60)
+    assert not flying(snap) and len(snap["shootdowns"]) == 1 and snap["shootdowns"][0]["track"] is not None

@@ -36,6 +36,7 @@ TRACK_TTL_S = 30 * 60       # без новых фиксаций трек счи
 COAST_MAX_S = 90 * 60       # но не дольше этого без единой фиксации: погрешность положения уже сотни километров
 COAST_BASES = ("target", "observed", "hint", "alert")   # курс по «вероятно вглубь» для счисления слишком зыбок
 ARRIVED_HOLD_S = 10 * 60    # долетела до заявленной цели — держим столько, потом считаем пролетевшей
+ENGAGED_HOLD_S = 15 * 60    # по цели работало ПВО, а новых фиксаций нет: скорее всего сбита — держим столько и снимаем
 COAST_GATE = 0.35           # фиксация «по счислению» засчитывается, если ближе этой доли пройденного пути к расчётной точке
 SPEED_WINDOW_S = 40 * 60
 # Поток дронов один за другим над одним городом: новая фиксация в уже пройденном месте или «позади»
@@ -433,6 +434,8 @@ class Tracker:
     def alive(self, tr: Track, t: float) -> bool:
         if tr.status != "active":
             return False
+        if tr.engaged_at is not None and tr.engaged_at >= tr.last.t and t - tr.engaged_at > ENGAGED_HOLD_S:
+            return False   # после работы ПВО цель больше не фиксировали — дальше по счислению не ведём
         age = t - tr.last.t
         if age <= TRACK_TTL_S:
             return True
