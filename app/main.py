@@ -40,6 +40,7 @@ heatmap = Heatmap(engine.parser, store, settings.channel_regions)
 access = Access(settings.access_codes, settings.access_secret,
                 public_full=settings.public_level == "full" or (settings.demo and not settings.access_codes))
 clients: dict[WebSocket, bool] = {}  # соединение -> подробная карта (есть код доступа)
+REFRESH_S = 60                       # периодическая рассылка снимка без новых сообщений
 dirty = asyncio.Event()              # появились новые данные — пора разослать снимок
 
 
@@ -80,9 +81,13 @@ async def on_message(channel: str, msg_id: int, t: float, text: str) -> None:
 
 async def notifier() -> None:
     """Рассылаем снимок не чаще двух раз в секунду: при загрузке истории сообщения идут сотнями,
-    а пересчёт снимка недешёвый."""
+    а пересчёт снимка недешёвый. Без новых сообщений снимок всё равно обновляется раз в REFRESH_S:
+    цели летят дальше по расчёту, прогноз сдвигается, устаревшее снимается с карты."""
     while True:
-        await dirty.wait()
+        try:
+            await asyncio.wait_for(dirty.wait(), REFRESH_S)
+        except asyncio.TimeoutError:
+            pass
         await asyncio.sleep(0.5)
         dirty.clear()
         await broadcast()

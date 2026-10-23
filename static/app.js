@@ -658,15 +658,30 @@
     return Math.hypot((lo2 - lo1) * k, la2 - la1) * 111.2;
   };
   const smoothPath = new Map();   // id -> сглаженный прогноз: значок едет ровно по нарисованной линии
-  function setMotion(id, pr) {
+  // Сколько км вдоль линии до точки, ближайшей к pos: линия начинается у последней фиксации,
+  // а сервер присылает, где цель уже сейчас, — оттуда значок и продолжает путь
+  function kmAlong(path, cum, pos) {
+    let best = Infinity, km = 0;
+    for (let i = 1; i < path.length; i++) {
+      const [a, b] = [path[i - 1], path[i]];
+      const k = Math.cos(a[1] * Math.PI / 180);
+      const dx = (b[0] - a[0]) * k, dy = b[1] - a[1];
+      const len2 = dx * dx + dy * dy;
+      const f = len2 ? Math.min(Math.max((((pos[0] - a[0]) * k) * dx + (pos[1] - a[1]) * dy) / len2, 0), 1) : 0;
+      const d = kmBetween(pos, [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
+      if (d < best) { best = d; km = cum[i - 1] + (cum[i] - cum[i - 1]) * f; }
+    }
+    return km;
+  }
+  function setMotion(id, pr, pos) {
     if (!pr || pr.path.length < 2) { droneMotion.delete(id); return; }
     const path = smoothPath.get(id) || pr.path.map(([la, lo]) => [lo, la]);
     const cum = [0];
     for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + kmBetween(path[i - 1], path[i]));
-    droneMotion.set(id, { path, cum, speed: pr.speed, at: performance.now() });
+    droneMotion.set(id, { path, cum, km0: kmAlong(path, cum, pos), speed: pr.speed, at: performance.now() });
   }
   function motionPos(m, nowMs) {
-    const dist = m.speed * ((nowMs - m.at) / 3.6e6) * timeScale;
+    const dist = m.km0 + m.speed * ((nowMs - m.at) / 3.6e6) * timeScale;
     const { path, cum } = m;
     if (dist >= cum[cum.length - 1]) return path[path.length - 1];
     let i = 1;
@@ -705,15 +720,16 @@
       bindPopup(m, el);
       droneMarkers.set(tr.id, m);
     }
-    m.setLngLat(pos);
-    setMotion(tr.id, tr.prediction);
+    setMotion(tr.id, tr.prediction, pos);
+    const mo = droneMotion.get(tr.id);
+    m.setLngLat(mo ? motionPos(mo, performance.now()) : pos);
     const el = m.getElement();
     el.setAttribute("aria-label", bearing == null ? `Цель #${tr.id}, курс неизвестен` : `Цель #${tr.id}`);
     el.querySelector("svg").style.transform = `rotate(${bearing ?? 0}deg)`;
     el.classList.toggle("no-course", bearing == null);
     el.classList.toggle("weak", !!tr.prediction && tr.prediction.basis === "inland");   // курс вероятный, а не наблюдаемый
-    // давно не обновлявшаяся цель бледнеет: скоро она пропадёт с карты
-    el.style.opacity = (now - tr.points[tr.points.length - 1].t) > 18 * 60 ? "0.55" : "1";
+    // цель без фиксаций дольше получаса бледнеет: она летит только по расчёту
+    el.style.opacity = tr.coasting ? "0.7" : "1";
     el.classList.toggle("engaged", !!tr.engaged);
     el.querySelector("span").textContent = tr.count > 1 ? `×${tr.count}` : tr.mass ? "массово" : "";
     el._html = trackPopup(tr, now);
@@ -730,6 +746,7 @@
       html += `<div class="pop-sub">Одна фиксация: курс неизвестен, маршрут появится со второй точки.</div>`;
     } else {
       html += `<div class="pop-row">Курс ${pr.bearing}° · ~${pr.speed} км/ч <span class="sub">(${BASIS[pr.basis]})</span></div>`;
+      if (now - last.t > 10 * 60) html += `<div class="pop-sub">Положение расчётное: цель летит дальше этим курсом, пока не дадут отбой или не сообщат о сбитии${tr.coasting ? ". Новых фиксаций давно нет — точность низкая" : ""}.</div>`;
       if (tr.target) html += `<div class="pop-row">Заявленная цель: <b>${esc(tr.target)}</b></div>`;
       const next = (pr.districts_eta || []).slice(0, 2).concat(pr.regions_eta.slice(0, 2));
       if (next.length) html += `<div class="pop-row">Дальше: ${next.map((r) => `${esc(r.name)} ${eta(r.eta_min)}`).join(", ")}</div>`;

@@ -388,3 +388,50 @@ def test_fixation_opposite_to_declared_target_is_another_drone(gaz):
     assert len(tracks) == 2
     first = next(t for t in tracks if t["points"][0]["place"] == "Таловский район")
     assert len(first["points"]) == 1 and first["count"] == 3 and first["target"] == "Новохопёрск"
+
+
+def test_track_keeps_flying_while_alert_holds(gaz):
+    """Фиксаций больше нет, но тревога действует: цель летит дальше по расчёту, а не пропадает и не стоит на месте."""
+    e = Engine(gaz)
+    e.process("a", "⚠️ Угроза атаки БПЛА в Брянской области", T0)
+    e.process("a", "⚠️ Угроза атаки БПЛА в Калужской области", T0)
+    e.process("a", "🛵 БПЛА в районе Трубчевска", T0 + 60)
+    e.process("a", "🛵 БПЛА над Брянском", T0 + 31 * 60)
+    snaps = [e.snapshot(T0 + m * 60) for m in (40, 70, 80)]
+    tracks = [[t for t in s["tracks"] if t["status"] == "active"] for s in snaps]
+    assert all(len(t) == 1 for t in tracks)
+    starts = [t[0]["prediction"]["path"][0] for t in tracks]
+    assert starts[0] != starts[1] != starts[2]           # значок продолжает путь от последней фиксации
+    assert tracks[2][0]["coasting"] and not tracks[0][0]["coasting"]
+
+    e.process("a", "✅ Отбой угрозы БПЛА по Калужской области", T0 + 81 * 60)
+    snap = e.snapshot(T0 + 82 * 60)
+    assert not [t for t in snap["tracks"] if t["status"] == "active"]
+
+
+def test_coasting_ends_without_alert_or_after_reaching_target(gaz):
+    e = Engine(gaz)
+    e.process("a", "🛵 БПЛА в районе Трубчевска", T0)
+    e.process("a", "🛵 БПЛА над Брянском", T0 + 30 * 60)
+    e.alerts.clear()   # тревог нет: по счислению не ведём, через полчаса цель потеряна
+    assert not [t for t in e.snapshot(T0 + 65 * 60)["tracks"] if t["status"] == "active"]
+
+    e = Engine(gaz)
+    e.process("a", "⚠️ Угроза атаки БПЛА в Курской области", T0)
+    e.process("a", "🛵 БПЛА над Курчатовым курсом на Курск", T0)
+    # до Курска ~35 км — долетела за ~15 минут; через час без новостей считаем, что пролетела
+    assert not [t for t in e.snapshot(T0 + 60 * 60)["tracks"] if t["status"] == "active"]
+
+
+def test_clear_behind_does_not_stop_drone_that_flew_on(gaz):
+    """Отбой в области, из которой цель по расчёту уже улетела в соседнюю с тревогой, цель не снимает."""
+    e = Engine(gaz)
+    e.process("a", "⚠️ Угроза атаки БПЛА в Брянской области", T0)
+    e.process("a", "⚠️ Угроза атаки БПЛА в Калужской области", T0)
+    e.process("a", "🛵 БПЛА в районе Трубчевска", T0 + 60)
+    e.process("a", "🛵 БПЛА над Брянском", T0 + 31 * 60)
+    tr = e.tracker.tracks[0]
+    t = T0 + 75 * 60
+    assert e.tracker.region_now(tr, t) == "kaluga-oblast"
+    e.process("a", "✅ Отбой угрозы БПЛА по Брянской области", t)
+    assert [x for x in e.snapshot(t + 60)["tracks"] if x["status"] == "active"]

@@ -29,7 +29,14 @@ GATE_BASE_KM = 15.0         # погрешность «в районе горо�
 DUPLICATE_KM = 8.0          # та же точка от разных каналов
 DUPLICATE_WINDOW_S = 6 * 60
 NEAR_KM = 40.0              # «сбитие / работа ПВО над X» относим к цели не дальше этого
-TRACK_TTL_S = 30 * 60       # без новых фиксаций трек считается потерянным
+TRACK_TTL_S = 30 * 60       # без новых фиксаций трек считается потерянным...
+# ...если только цель не «летит по счислению»: курс известен, а там, где она по расчёту сейчас, ещё действует тревога.
+# Каналы пишут о цели не каждую минуту: дрон не исчезает, а летит дальше, пока не дадут отбой, не сообщат о сбитии,
+# он не долетит до заявленной цели или не выйдет из зоны тревог.
+COAST_MAX_S = 90 * 60       # но не дольше этого без единой фиксации: погрешность положения уже сотни километров
+COAST_BASES = ("target", "observed", "hint", "alert")   # курс по «вероятно вглубь» для счисления слишком зыбок
+ARRIVED_HOLD_S = 10 * 60    # долетела до заявленной цели — держим столько, потом считаем пролетевшей
+COAST_GATE = 0.35           # фиксация «по счислению» засчитывается, если ближе этой доли пройденного пути к расчётной точке
 SPEED_WINDOW_S = 40 * 60
 # Поток дронов один за другим над одним городом: новая фиксация в уже пройденном месте или «позади»
 # цели — это следующий дрон, а не разворот первого (иначе трек рисует зигзаги и курс «назад»).
@@ -193,9 +200,10 @@ class Prediction:
 
 
 class Tracker:
-    def __init__(self, gazetteer: Gazetteer, inland=None):
+    def __init__(self, gazetteer: Gazetteer, inland=None, alerted=None):
         self.gaz = gazetteer
         self.finder = inland   # OriginFinder: курс «вглубь» от границы Украины
+        self.alerted = alerted  # (region_id, t) -> действует ли там тревога по БПЛА; без неё счисления нет
         self.tracks: list[Track] = []
         self._ids = itertools.count(1)
 
@@ -303,10 +311,23 @@ class Tracker:
         return track
 
     def clear_regions(self, region_ids: list[str], t: float) -> None:
-        """Отбой в регионе: треки, последние точки которых там, считаем завершёнными."""
+        """Отбой в регионе: цели, которые сейчас (по расчёту) там, считаем завершёнными.
+
+        Цель, которая по расчёту уже перелетела в соседнюю область с действующей тревогой, отбой позади себя не снимает.
+        """
         for tr in self.active(t):
-            if tr.last.region_id in region_ids and t >= tr.last.t:
+            if t < tr.last.t:
+                continue
+            here = self.region_now(tr, t)
+            if here in region_ids or (tr.last.region_id in region_ids and not self._alerted(here, t)):
                 tr.status = "lost"
+
+    def region_now(self, tr: Track, t: float) -> str:
+        """Область, где цель сейчас по расчёту (за пределами областей — последняя известная)."""
+        return self.gaz.region_at(*tr.position_at(t)) or tr.last.region_id
+
+    def _alerted(self, region_id: str | None, t: float) -> bool:
+        return bool(region_id) and self.alerted is not None and self.alerted(region_id, t)
 
     # ---- сопоставление ----
 
@@ -332,6 +353,9 @@ class Tracker:
                 continue
             plat, plon = tr.position_at(t)
             d_pred = haversine_km(plat, plon, place.lat, place.lon)
+            if t - tr.last.t > TRACK_TTL_S and \
+                    d_pred > GATE_BASE_KM + COAST_GATE * haversine_km(tr.last.lat, tr.last.lon, plat, plon):
+                continue  # цель давно летит по счислению: засчитываем только фиксацию рядом с расчётной точкой
             cost = min(d_pred, d_last * 1.3) / gate
             tr_bearing, _, basis = tr.motion()
             if tr_bearing is not None and d_last > 10:
@@ -402,12 +426,30 @@ class Tracker:
             return angle_diff(v, tr.inland) > FIRST_DEG
         return False
 
+    def coasts(self, tr: Track) -> bool:
+        """Курс достаточно надёжен, чтобы вести цель по счислению без новых фиксаций."""
+        return tr.course()[3] in COAST_BASES
+
+    def alive(self, tr: Track, t: float) -> bool:
+        if tr.status != "active":
+            return False
+        age = t - tr.last.t
+        if age <= TRACK_TTL_S:
+            return True
+        if age > COAST_MAX_S or not self.coasts(tr):
+            return False
+        (lat, lon, t0), _, speed, _ = tr.course()
+        goal = tr._goal()
+        if goal and t > t0 + haversine_km(lat, lon, *goal) / speed * 3600 + ARRIVED_HOLD_S:
+            return False   # по расчёту давно долетела до цели, а новых сообщений нет — пролетела
+        return self._alerted(self.region_now(tr, t), t)
+
     def active(self, t: float) -> list[Track]:
-        return [tr for tr in self.tracks if tr.status == "active" and t - tr.last.t <= TRACK_TTL_S]
+        return [tr for tr in self.tracks if self.alive(tr, t)]
 
     def expire(self, t: float, keep_s: float = 3 * 3600) -> None:
         for tr in self.tracks:
-            if tr.status == "active" and t - tr.last.t > TRACK_TTL_S:
+            if tr.status == "active" and not self.alive(tr, t):
                 tr.status = "lost"
         self.tracks = [tr for tr in self.tracks if t - tr.last.t <= keep_s]
 

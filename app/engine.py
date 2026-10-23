@@ -81,7 +81,7 @@ class Engine:
         self.parser = MessageParser(gazetteer)
         self.forecast_parser = ForecastParser(gazetteer)
         self.origins = OriginFinder(DATA_DIR)
-        self.tracker = Tracker(gazetteer, self.origins)
+        self.tracker = Tracker(gazetteer, self.origins, alerted=self._uav_alerted)
         self.channel_regions = channel_regions or {}
         self.alerts: dict[str, RegionAlert] = {}
         self.district_alerts: dict[str, RegionAlert] = {}
@@ -173,6 +173,12 @@ class Engine:
         self.version += 1
         return events
 
+    def _uav_alerted(self, rid: str, t: float) -> bool:
+        """Действует ли в области тревога по БПЛА (или «жёлтый уровень»): пока да — цель там летит по счислению."""
+        alert = self.alerts.get(rid)
+        return alert is not None and any(lvl in ("uav", "warn") and t - ts <= UAV_ALERT_TTL_S
+                                         for lvl, ts in alert.levels.items())
+
     @staticmethod
     def _clear(alerts: dict[str, RegionAlert], ids, t: float, scope: str = "all") -> list[str]:
         cleared = []
@@ -231,14 +237,15 @@ class Engine:
         tracks = []
         for tr in self.tracker.tracks:
             age = now - tr.last.t
-            alive = tr.status == "active" and age <= TRACK_TTL_S
-            if len(tr.points) == 1 and age > LONE_TRACK_SHOW_S:
+            alive = self.tracker.alive(tr, now)
+            if len(tr.points) == 1 and age > LONE_TRACK_SHOW_S and not (alive and self.tracker.coasts(tr)):
                 continue
             if not alive and now - (tr.end[2] if tr.end else tr.last.t) > (OLD_TRACK_SHOW_S if tr.end or age > TRACK_TTL_S else 0):
                 continue
             item = {
                 "id": tr.id,
-                "status": tr.status if tr.status != "active" or now - tr.last.t <= TRACK_TTL_S else "lost",
+                "status": tr.status if tr.status != "active" or alive else "lost",
+                "coasting": alive and age > TRACK_TTL_S,   # фиксаций давно нет: положение только расчётное
                 "count": max(tr.count, 1),
                 "engaged": tr.status == "active" and tr.engaged_at is not None and now - tr.engaged_at <= ENGAGED_SHOW_S,
                 "target": tr.target.name if tr.target else None,
